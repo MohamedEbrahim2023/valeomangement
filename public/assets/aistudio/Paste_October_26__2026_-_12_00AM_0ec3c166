@@ -1,0 +1,1532 @@
+# ROLE & OBJECTIVE
+
+Act as a Senior Software Architect, Senior Full-Stack Engineer, Database Engineer, Cybersecurity Engineer, QA Engineer, and UI/UX Designer.
+
+Your mission is to design, implement, test, and prepare for production a complete, secure, modern, responsive Employee Management and Task Tracking System.
+
+This must be a REAL, WORKING APPLICATION, not a static dashboard, UI prototype, or collection of disconnected pages.
+
+Every button, form, filter, status change, progress update, notification, and administrative action must work correctly and persist its data.
+
+Make independent technical decisions when appropriate, prioritize simplicity, maintainability, security, performance, and usability, and explain significant architectural decisions.
+
+Do not merely provide a plan or code snippets. Implement the application incrementally, validate your work, and verify that the major workflows function end to end.
+
+---
+
+# 1. PROJECT OVERVIEW
+
+Build a web-based employee management platform with two primary roles:
+
+1. ADMIN / MANAGER
+2. EMPLOYEE
+
+The administrator manages employees, creates and assigns tasks, monitors task progress, receives notifications, reviews completed work, and evaluates team performance.
+
+Each employee has a private account with an email and password and can access only the employee functionality authorized for their account.
+
+Employees can view their assigned tasks, start working on them, update their progress, submit work descriptions, and mark their tasks as completed.
+
+The application must immediately reflect relevant changes in the manager's dashboard through real-time updates whenever possible.
+
+The system should feel like a polished, modern SaaS product.
+
+---
+
+# 2. REQUIRED TECHNOLOGY STACK
+
+Use the following technology stack unless a genuine technical limitation requires a documented alternative.
+
+Frontend:
+- Next.js with the App Router.
+- TypeScript with strict mode enabled.
+- React.
+- Tailwind CSS.
+- shadcn/ui for accessible and consistent UI components.
+- Lucide React for icons.
+- React Hook Form for form management.
+- Zod for schema validation.
+- TanStack Table for advanced employee and task tables when appropriate.
+- Recharts for performance charts when useful.
+
+Backend and database:
+- Supabase PostgreSQL as the primary database.
+- Supabase Auth for authentication and session management.
+- Supabase Realtime for live updates and notifications.
+- Supabase Storage only when file attachments are implemented.
+- Supabase Row Level Security (RLS) for database access control.
+- PostgreSQL functions and triggers only where they provide a clear security or consistency benefit.
+
+Deployment:
+- Vercel for the Next.js application.
+- Supabase for the managed backend and database.
+
+Use the official, currently supported versions of these technologies and ensure that their APIs are compatible.
+
+Keep the architecture lightweight. Avoid unnecessary microservices, complex state management, excessive dependencies, or expensive infrastructure.
+
+Use server-side rendering and server-side data access where appropriate. Use client-side components only when interactivity requires them.
+
+IMPORTANT:
+The frontend must never be trusted to enforce security by itself.
+
+Every sensitive operation must be authorized on the server or enforced through correctly configured database policies.
+
+Never expose the Supabase service-role key or other privileged secrets in browser code.
+
+---
+
+# 3. USER ROLES AND ACCESS CONTROL
+
+## A. ADMIN / MANAGER
+
+The administrator can:
+
+- Access the administrative dashboard.
+- Create employee accounts.
+- View all employees.
+- Edit employee information.
+- Activate or deactivate employee accounts.
+- Delete employees through a carefully designed process.
+- Assign tasks to one or more employees.
+- View all tasks and their histories.
+- Edit task details.
+- Change task priorities and deadlines.
+- Monitor employee progress.
+- Receive notifications about task activities.
+- Review submitted work.
+- Approve or reject completion submissions.
+- View performance rankings.
+- Filter and search employees and tasks.
+- View reports and analytics.
+- Access the activity audit log.
+- Configure basic organization settings.
+
+Administrative privileges must be enforced server-side.
+
+## B. EMPLOYEE
+
+An employee can:
+
+- Sign in using their email and password.
+- View their personal dashboard.
+- View only tasks they are authorized to access.
+- Open a task's details.
+- Start an assigned task.
+- Update task progress.
+- Add progress notes describing completed work.
+- View their task history.
+- Submit a task for completion review.
+- View the outcome of a manager's review.
+- Receive relevant notifications.
+- Edit permitted profile fields.
+- Change their password through a secure authentication flow.
+
+Employees must never be able to:
+
+- Access the administrator dashboard.
+- Create or promote themselves to administrator.
+- View private information belonging to other employees.
+- Change another employee's tasks.
+- Assign tasks to themselves or others.
+- Modify task approval decisions.
+- Modify their own leaderboard score or ranking directly.
+- Delete audit records.
+- Modify trusted role information through ordinary profile updates.
+
+Implement deny-by-default authorization.
+
+---
+
+# 4. AUTHENTICATION AND EMPLOYEE MANAGEMENT
+
+Build a complete authentication workflow.
+
+Requirements:
+
+1. Secure login page.
+2. Logout functionality.
+3. Persistent, securely managed sessions.
+4. Password reset through email.
+5. Appropriate session expiration and refresh handling.
+6. Protected routes.
+7. Role-based redirects after login.
+8. Clear error messages for invalid credentials.
+9. Protection against account enumeration where practical.
+10. Rate limiting or abuse protection for authentication endpoints.
+
+Employee creation:
+
+The administrator opens an "Add Employee" form containing:
+
+- Full name.
+- Email address.
+- Optional department.
+- Optional job title.
+- Optional employee identifier.
+- Account status.
+- Optional profile image.
+
+The system validates the form before submission.
+
+Email addresses must be unique.
+
+The employee account must be created through a trusted server-side administrative operation using the supported Supabase Auth administration APIs.
+
+IMPORTANT:
+Never create an employee account by exposing an administrator's credentials or service-role key to the browser.
+
+Prefer an invitation-based workflow or a secure temporary-password setup flow. Do not email plaintext permanent passwords.
+
+When an employee is deactivated, prevent further authenticated access according to the chosen session-revocation strategy.
+
+Employee deletion must handle related task assignments and historical records consistently. Prefer soft deletion or deactivation when permanent deletion would destroy important audit history.
+
+If permanent deletion is required, implement an explicit, documented deletion policy that respects privacy and data-retention requirements.
+
+---
+
+# 5. ADMIN DASHBOARD
+
+Create a professional, responsive administrative dashboard.
+
+The dashboard should provide a quick overview of the organization.
+
+## A. Summary Cards
+
+Display:
+
+- Total employees.
+- Active employees.
+- Total assigned tasks.
+- Tasks not yet started.
+- Tasks in progress.
+- Tasks awaiting review.
+- Completed and approved tasks.
+- Overdue tasks.
+- Overall task completion rate.
+
+Every metric must be calculated from real database records, not hardcoded values.
+
+Define the calculation for each metric clearly.
+
+For example:
+
+Overall completion rate =
+Number of approved completed task assignments
+divided by
+Total task assignments included in the selected reporting period,
+multiplied by 100.
+
+Exclude canceled assignments from the denominator and clearly document any other exclusions.
+
+## B. Employee Table
+
+Display:
+
+- Employee name.
+- Email.
+- Department.
+- Job title.
+- Account status.
+- Total assigned tasks.
+- Approved completed tasks.
+- In-progress tasks.
+- Overdue tasks.
+- Completion rate.
+- Last activity.
+- Actions.
+
+Provide:
+
+- Search by name or email.
+- Filtering by department and status.
+- Sorting by completion rate, completed tasks, and recent activity.
+- Pagination.
+- A detailed employee profile page.
+- A button to open the employee's assigned tasks.
+
+Use clear visual indicators:
+
+- Green: completed and approved.
+- Blue: in progress.
+- Gray: not started.
+- Amber: awaiting review.
+- Red: overdue or requiring attention.
+
+Do not communicate status through color alone. Include text labels and accessible icons.
+
+## C. Task Management
+
+Create a dedicated task management interface.
+
+The administrator can create a task with:
+
+- Task title.
+- Detailed description.
+- Priority: Low, Medium, High, Critical.
+- Start date.
+- Deadline.
+- Optional estimated effort.
+- Assigned employee or employees.
+- Optional task category.
+- Optional checklist or subtasks.
+- Optional completion criteria.
+- Optional attachments.
+
+Support assigning one task to multiple employees.
+
+IMPORTANT:
+When a task is assigned to multiple employees, each employee must have an independent assignment record and independent progress percentage.
+
+For example:
+
+Task: Build a customer registration page.
+
+Employee A: 100% complete.
+Employee B: 60% complete.
+Employee C: 20% complete.
+
+The system must not combine their progress into one shared progress value.
+
+The administrator must be able to:
+
+- Edit task details.
+- Reassign employees.
+- Change deadlines.
+- Change priorities.
+- Cancel assignments with an audit record.
+- View individual progress histories.
+- Open each employee's progress updates.
+- Review submitted completion evidence.
+- Approve or reject submitted work.
+
+Avoid silently overwriting historical information when tasks are edited.
+
+## D. Live Progress Monitoring
+
+Provide a task monitoring interface showing:
+
+- Employee name.
+- Task title.
+- Current status.
+- Progress percentage.
+- Latest progress note.
+- Last update timestamp.
+- Deadline.
+- Overdue indicator.
+- Completion submission status.
+
+Progress bars must reflect actual persisted values.
+
+When an employee updates progress, the administrator's interface should update automatically using Supabase Realtime or another reliable mechanism.
+
+Implement appropriate subscriptions, cleanup, error handling, and reconnection behavior.
+
+Do not rely on realtime events alone for data integrity. Persist changes first and use the database as the source of truth.
+
+Provide a manual refresh fallback.
+
+---
+
+# 6. EMPLOYEE DASHBOARD
+
+Create a clean, simple, responsive employee workspace.
+
+The interface should make it obvious what the employee needs to do next.
+
+## A. Overview
+
+Display:
+
+- Welcome message.
+- Tasks assigned to the employee.
+- Tasks not started.
+- Tasks in progress.
+- Tasks awaiting review.
+- Completed tasks.
+- Overdue tasks.
+- Recent activity.
+- Upcoming deadlines.
+
+Show a useful empty state when the employee has no tasks.
+
+## B. My Tasks
+
+Display tasks as cards or a table.
+
+Each task must show:
+
+- Title.
+- Short description.
+- Priority.
+- Deadline.
+- Current status.
+- Progress bar.
+- Last update.
+- Primary action button.
+
+The primary action depends on the state:
+
+- Not Started: "Start Task".
+- In Progress: "Update Progress".
+- Awaiting Review: "View Submission".
+- Rejected: "Revise and Resubmit".
+- Approved: "View Completed Task".
+
+Employees must not be able to start canceled or unauthorized tasks.
+
+## C. Starting a Task
+
+When an employee clicks "Start Task":
+
+1. Validate that the employee is assigned to the task.
+2. Validate that the task is in an appropriate state.
+3. Record the start timestamp.
+4. Update the assignment status to In Progress.
+5. Add an activity log entry.
+6. Create an administrator notification.
+7. Update the manager's dashboard.
+8. Display a success message to the employee.
+
+The action must be atomic where appropriate and safe against duplicate submissions.
+
+## D. Updating Progress
+
+Create a dedicated progress-update form.
+
+Fields:
+
+- Progress percentage.
+- Work completed since the last update.
+- Optional blockers or challenges.
+- Optional next steps.
+- Optional evidence or attachments.
+
+The progress percentage must be between 0 and 100.
+
+Prevent invalid values, malformed requests, unauthorized modifications, and unintended duplicate updates.
+
+Provide a clear progress bar preview.
+
+Require a meaningful work description for ordinary progress updates.
+
+A progress update should create an immutable history entry containing:
+
+- Assignment ID.
+- Employee ID.
+- Previous percentage.
+- New percentage.
+- Description.
+- Optional blockers.
+- Optional next steps.
+- Timestamp.
+- Optional attachment references.
+
+Do not overwrite the previous progress note when a new update is submitted.
+
+The employee should be able to see their complete progress history.
+
+If the progress percentage changes from 30% to 55%, record both values and the accompanying description.
+
+Notify the administrator about every successfully persisted progress update.
+
+Prevent notification creation when the corresponding operation fails.
+
+## E. Completing a Task
+
+When the employee believes the task is complete:
+
+1. Require the progress percentage to be 100%.
+2. Require a completion summary.
+3. Allow optional evidence or attachments.
+4. Submit the assignment for review.
+5. Change the status to Awaiting Review.
+6. Record the submission timestamp.
+7. Create an administrator notification.
+8. Update the manager's dashboard.
+9. Inform the employee that the task awaits review.
+
+IMPORTANT:
+A progress value of 100% must not automatically mean that the task has been approved.
+
+Use an explicit review workflow.
+
+The administrator can:
+
+- Approve completion.
+- Reject completion and provide a reason.
+- Request changes.
+
+If rejected, return the assignment to In Progress and preserve the submission and review history.
+
+When approved, record:
+
+- Reviewer ID.
+- Review timestamp.
+- Decision.
+- Optional review notes.
+
+Only approved completions count toward the official completed-task ranking.
+
+---
+
+# 7. NOTIFICATION SYSTEM
+
+Implement a persistent in-app notification system.
+
+Use Supabase Realtime to deliver notifications promptly where supported.
+
+Notifications must remain available after the user refreshes the page or signs in again.
+
+## Administrator notifications
+
+Create notifications for:
+
+- Employee account creation when relevant.
+- Task started.
+- Progress updated.
+- Work submitted for review.
+- Task completion approved or rejected.
+- Task deadline approaching.
+- Task overdue.
+- Important task assignment changes.
+- Other significant events defined by the application.
+
+For the main employee activity workflow, every successfully recorded progress update must notify the relevant administrator.
+
+Each notification should contain:
+
+- Unique ID.
+- Recipient ID.
+- Event type.
+- Short title.
+- Description.
+- Related task or assignment ID.
+- Actor ID when applicable.
+- Creation timestamp.
+- Read/unread status.
+
+The administrator can:
+
+- Open the notification center.
+- See unread counts.
+- Mark individual notifications as read.
+- Mark all notifications as read.
+- Open the related task directly.
+
+Use pagination or incremental loading for large notification histories.
+
+Prevent duplicate notifications when the same operation is retried.
+
+Notifications must be authorized so that users can read only their own notifications, except for explicitly authorized administrative views.
+
+Do not expose notification contents to unauthorized employees.
+
+## Optional browser notifications
+
+Implement browser push or desktop notifications only if useful and properly configured.
+
+Ask for browser notification permission only after an appropriate user action.
+
+The application must remain fully usable if browser notifications are denied.
+
+Do not claim that browser push notifications work when the necessary push infrastructure has not been implemented.
+
+---
+
+# 8. EMPLOYEE LEADERBOARD AND PERFORMANCE SCORING
+
+Create a leaderboard that ranks employees by approved task completions.
+
+## A. Primary ranking
+
+Rank employees using:
+
+1. Number of approved completed assignments.
+2. On-time completion rate as a secondary criterion.
+3. Average completion time or another documented metric as a tertiary criterion.
+
+Show the ranking methodology clearly.
+
+Display:
+
+- Rank.
+- Employee name.
+- Department.
+- Approved completed tasks.
+- Total assigned tasks.
+- Completion rate.
+- On-time completion rate.
+- Current task count.
+
+Make the ranking period configurable:
+
+- All time.
+- Current month.
+- Previous month.
+- Custom date range.
+
+Use consistent tie-breaking rules.
+
+Avoid ranking employees only by raw task counts when assignments have substantially different difficulty levels.
+
+## B. Optional weighted scoring
+
+Provide an extensible scoring model if it adds value.
+
+For example:
+
+- Approved completion: base points.
+- On-time completion: bonus points.
+- Manager-approved quality: optional bonus.
+- Task priority or complexity: optional weight.
+
+Make the scoring model configurable and document the formulas.
+
+Never allow employees to modify their own points or ranking.
+
+Store authoritative scoring data in trusted backend logic or derive it from approved records.
+
+Prevent duplicate scoring for repeated submissions.
+
+Avoid rewarding meaningless activity, excessive updates, or artificially inflated progress percentages.
+
+If task weights are introduced, make them explicit and consistent.
+
+## C. Performance indicators
+
+Use visual indicators for:
+
+- Strong performance.
+- Normal progress.
+- Tasks requiring attention.
+- Overdue assignments.
+
+Do not treat an employee as underperforming merely because they have fewer assigned tasks.
+
+Show workload alongside completed tasks so that comparisons remain fair.
+
+---
+
+# 9. DATABASE ARCHITECTURE
+
+Design a normalized PostgreSQL schema with appropriate indexes, constraints, relationships, and migration files.
+
+At minimum, consider these tables:
+
+## profiles
+
+- id: UUID, primary key, references auth.users.
+- full_name.
+- department.
+- job_title.
+- employee_number.
+- avatar_url.
+- account_status.
+- created_at.
+- updated_at.
+- deleted_at, if implementing soft deletion.
+
+Keep authorization roles in a trusted structure. Do not allow ordinary users to assign themselves administrative privileges through profile updates.
+
+## organizations
+
+If the system is intended to support multiple companies or teams:
+
+- id.
+- name.
+- created_at.
+
+Use organization scoping consistently across all relevant tables.
+
+For a single-organization MVP, keep the implementation simple while avoiding an architecture that makes future expansion unnecessarily difficult.
+
+## tasks
+
+- id.
+- organization_id, when applicable.
+- title.
+- description.
+- priority.
+- category.
+- start_date.
+- due_date.
+- created_by.
+- estimated_effort.
+- task_status.
+- created_at.
+- updated_at.
+- canceled_at, if applicable.
+
+## task_assignments
+
+- id.
+- task_id.
+- employee_id.
+- assigned_by.
+- status.
+- progress_percentage.
+- started_at.
+- submitted_at.
+- completed_at.
+- created_at.
+- updated_at.
+
+Add appropriate uniqueness constraints to prevent duplicate assignments when duplicates are not intended.
+
+Keep employee progress independent for each assignment.
+
+## task_progress_updates
+
+- id.
+- assignment_id.
+- employee_id.
+- previous_percentage.
+- new_percentage.
+- description.
+- blockers.
+- next_steps.
+- created_at.
+
+Treat progress history as append-only for normal application users.
+
+## task_submissions
+
+- id.
+- assignment_id.
+- employee_id.
+- submission_summary.
+- submitted_at.
+- version.
+
+Use versioning or a submission-history design so resubmissions do not erase earlier submissions.
+
+## task_reviews
+
+- id.
+- assignment_id.
+- reviewer_id.
+- decision.
+- review_notes.
+- created_at.
+
+Preserve review history.
+
+## notifications
+
+- id.
+- recipient_id.
+- actor_id.
+- event_type.
+- title.
+- body.
+- related_task_id.
+- related_assignment_id.
+- created_at.
+- read_at.
+
+Add indexes supporting unread notification queries.
+
+## activity_logs
+
+- id.
+- organization_id, when applicable.
+- actor_id.
+- action.
+- entity_type.
+- entity_id.
+- metadata.
+- created_at.
+
+The log must not be editable by ordinary users.
+
+## task_attachments
+
+If attachments are implemented:
+
+- id.
+- assignment_id.
+- uploaded_by.
+- storage_path.
+- original_filename.
+- content_type.
+- file_size.
+- created_at.
+
+Store private files in private storage and enforce appropriate access policies.
+
+You may adjust this schema when justified, but preserve its security, auditability, and data-integrity requirements.
+
+Use database migrations for schema changes.
+
+Do not rely on manual dashboard edits that cannot be reproduced from the repository.
+
+---
+
+# 10. DATABASE SECURITY AND ROW LEVEL SECURITY
+
+Security is a mandatory deliverable, not an optional enhancement.
+
+Enable and verify Row Level Security on every exposed table containing application data.
+
+Implement policies based on the authenticated user's trusted identity, role, organization membership, and task assignment.
+
+At minimum:
+
+Employees may:
+- Read their permitted profile fields.
+- Read their own assignments.
+- Read tasks associated with their assignments.
+- Create progress updates only for their own assignments.
+- Submit their own assigned work.
+- Read their own notifications.
+- Mark their own notifications as read.
+- Read their own authorized progress and review history.
+
+Administrators may:
+- Manage employees within their authorized organization.
+- Create and assign tasks within their authorized organization.
+- Read authorized task and assignment information.
+- Review assigned work.
+- Manage permitted notification and reporting functions.
+
+Enforce authorization in database policies and trusted server-side operations.
+
+Do not rely on hidden buttons, client-side role checks, or unguessable UUIDs as security controls.
+
+Prevent privilege escalation.
+
+Do not allow employees to directly update protected fields such as:
+
+- User role.
+- Reviewer ID.
+- Approval decision.
+- Completion approval timestamp.
+- Administrative score.
+- Organization membership.
+- Assignment ownership.
+
+Use column restrictions, trusted database functions, server-side validation, or other appropriate mechanisms.
+
+Review policies for recursive dependencies and unintended access paths.
+
+Verify that users cannot bypass the intended access rules through direct API requests.
+
+Provide automated tests for important RLS scenarios.
+
+---
+
+# 11. SERVER-SIDE VALIDATION AND DATA INTEGRITY
+
+Validate every untrusted input at the appropriate server boundary.
+
+Use Zod or an equivalent schema-validation system.
+
+Validation must include:
+
+- Required fields.
+- Correct email formats.
+- String length limits.
+- Allowed status values.
+- Valid UUIDs.
+- Valid dates.
+- Deadline and start-date consistency.
+- Progress percentages between 0 and 100.
+- Valid assignment ownership.
+- Valid task transitions.
+- Attachment type and size restrictions.
+- Reasonable limits on text fields and request sizes.
+
+Do not trust IDs, roles, scores, percentages, or status values supplied by the browser.
+
+Enforce important invariants at the database level wherever possible.
+
+Use transactions or atomic database functions for operations that modify multiple related records.
+
+For example, a progress update should not leave the database in a state where the progress record exists but the assignment update failed unexpectedly.
+
+Where an operation requires both a database update and notification creation, design a reliable mechanism such as a transactional outbox when appropriate.
+
+Avoid relying on separate, unrelated client requests for operations that must succeed or fail together.
+
+Handle concurrent updates safely.
+
+Prevent stale requests from overwriting newer progress.
+
+Use optimistic concurrency or another suitable strategy where necessary.
+
+---
+
+# 12. AUDIT LOGGING
+
+Record significant administrative and employee actions.
+
+Examples:
+
+- Employee created.
+- Employee deactivated.
+- Task created.
+- Task edited.
+- Task assigned.
+- Task reassigned.
+- Task started.
+- Progress updated.
+- Completion submitted.
+- Completion approved.
+- Completion rejected.
+- Deadline changed.
+- Task canceled.
+
+Each audit entry should identify:
+
+- Who performed the action.
+- What action occurred.
+- Which entity was affected.
+- When the action occurred.
+- Relevant non-sensitive metadata.
+
+Do not store passwords, access tokens, service-role keys, or other secrets in logs.
+
+Do not permit ordinary users to alter or delete historical audit entries.
+
+Minimize personal data in audit metadata.
+
+Document the retention policy.
+
+---
+
+# 13. UI/UX AND VISUAL DESIGN
+
+Design a polished, contemporary SaaS interface.
+
+The application must be visually coherent and easy to navigate.
+
+## Design direction
+
+Use a clean enterprise dashboard style with:
+
+- A consistent spacing system.
+- Clear typography.
+- Balanced whitespace.
+- Subtle borders and shadows.
+- Rounded cards.
+- Well-designed tables.
+- Consistent iconography.
+- Restrained, meaningful color usage.
+- Clear visual hierarchy.
+
+Suggested palette:
+
+- Primary: Deep Indigo or Professional Blue.
+- Background: Soft neutral gray or off-white.
+- Surfaces: White.
+- Success: Green.
+- Warning: Amber.
+- Error: Red.
+- Secondary information: Slate or muted blue-gray.
+
+Use CSS variables or design tokens so colors can be changed consistently.
+
+Do not scatter arbitrary color values across components.
+
+## Layout
+
+Desktop:
+- Sidebar navigation.
+- Top navigation bar.
+- Main content area.
+- Responsive data tables.
+- Dashboard cards.
+- Task detail panels.
+
+Mobile:
+- Responsive navigation or a mobile menu.
+- Stacked summary cards.
+- Mobile-friendly task cards.
+- Forms optimized for touch.
+- No horizontal overflow.
+- Accessible touch targets.
+
+## Required pages
+
+Public/authentication:
+- Login.
+- Password reset.
+- Password setup or invitation acceptance.
+
+Administrator:
+- Dashboard.
+- Employee directory.
+- Create employee.
+- Employee details.
+- Task directory.
+- Create task.
+- Edit task.
+- Task details.
+- Assignment progress details.
+- Completion review.
+- Notifications.
+- Leaderboard.
+- Reports.
+- Activity audit log.
+- Organization settings, if applicable.
+
+Employee:
+- My dashboard.
+- My tasks.
+- Task details.
+- Progress update form.
+- Completion submission.
+- Notifications.
+- Profile settings.
+
+## User experience requirements
+
+Every page must include appropriate:
+
+- Loading states.
+- Empty states.
+- Error states.
+- Success feedback.
+- Form validation messages.
+- Confirmation dialogs for destructive actions.
+- Disabled states during submission.
+- Recovery options for failed operations.
+
+Prevent duplicate submissions while requests are pending.
+
+Use optimistic UI only where safe and provide rollback or error recovery.
+
+Provide clear confirmation before deactivating employees, canceling tasks, or performing destructive actions.
+
+Never use a success toast when the underlying operation has failed.
+
+Support keyboard navigation and visible focus indicators.
+
+Use semantic HTML and accessible form labels.
+
+Meet WCAG 2.2 AA accessibility goals where practical.
+
+Support Arabic and English interfaces if practical, with proper right-to-left layout support for Arabic.
+
+Ensure that RTL is implemented structurally rather than by simply aligning text to the right.
+
+The interface must look intentional in both languages.
+
+---
+
+# 14. SEARCH, FILTERING, REPORTS, AND EXPORTS
+
+Implement practical search and filtering.
+
+Administrators should be able to filter tasks by:
+
+- Status.
+- Assigned employee.
+- Priority.
+- Department.
+- Deadline.
+- Overdue status.
+- Completion percentage.
+- Creation date.
+
+Employees should be able to filter their tasks by status and deadline.
+
+Implement server-side pagination for potentially large datasets.
+
+Avoid fetching every employee, task, progress update, or notification into the browser.
+
+Create useful reports, such as:
+
+- Tasks completed during a selected period.
+- Tasks overdue.
+- Employee workload.
+- Employee completion rates.
+- On-time completion rates.
+- Tasks awaiting review.
+- Historical progress trends.
+
+Provide CSV export where useful.
+
+Restrict exports to authorized administrators.
+
+Prevent CSV formula injection when exporting untrusted text values.
+
+Do not expose employee data through public report URLs.
+
+---
+
+# 15. PERFORMANCE AND SCALABILITY
+
+Optimize for a small organization initially while maintaining sound engineering practices.
+
+Requirements:
+
+- Efficient database queries.
+- Proper indexes.
+- Server-side pagination.
+- Avoid N+1 queries.
+- Avoid unnecessary client-side rendering.
+- Reuse shared components.
+- Avoid unnecessary dependencies.
+- Avoid repeated database requests caused by poor component design.
+- Subscribe to realtime events only where necessary.
+- Clean up realtime subscriptions when components unmount.
+- Use sensible caching strategies.
+- Never serve private employee data through an incorrectly configured public cache.
+- Avoid over-fetching.
+- Handle database and network errors gracefully.
+
+The application should remain maintainable as the number of employees and tasks grows.
+
+Do not introduce caching that causes incorrect task progress, stale permissions, or cross-user data leakage.
+
+---
+
+# 16. SECURITY HARDENING
+
+Implement an appropriate security baseline.
+
+Requirements:
+
+- Secure authentication.
+- Server-side authorization.
+- Database RLS.
+- Secret management through environment variables.
+- No privileged secrets in client bundles.
+- Input validation.
+- Protection against SQL injection through parameterized database operations.
+- Safe output rendering.
+- Appropriate CSRF protections where relevant to the chosen session architecture.
+- Rate limiting for sensitive operations.
+- Secure account recovery.
+- Restricted file uploads.
+- Private attachment storage.
+- Appropriate security headers.
+- Safe redirects after authentication.
+- No open redirect vulnerabilities.
+- No exposure of sensitive error details.
+- No logging of credentials or access tokens.
+- Protection against privilege escalation.
+- Audit logging for critical operations.
+
+Use current security best practices for Next.js and Supabase.
+
+Do not invent a custom cryptographic system.
+
+Do not create custom password storage when Supabase Auth already provides the required functionality.
+
+Do not claim that the application is completely secure. Document remaining risks and the limits of the implemented controls.
+
+---
+
+# 17. ERROR HANDLING AND OBSERVABILITY
+
+Create a consistent error-handling strategy.
+
+Handle:
+
+- Authentication failures.
+- Unauthorized requests.
+- Validation failures.
+- Database errors.
+- Network timeouts.
+- Realtime disconnections.
+- Duplicate requests.
+- Missing records.
+- Expired sessions.
+- Failed file uploads.
+- Failed notification delivery.
+
+Return safe, predictable errors to the frontend.
+
+Record useful diagnostic information on the server without leaking secrets or unnecessary personal information.
+
+Differentiate between:
+
+- Validation errors.
+- Authentication errors.
+- Authorization errors.
+- Missing resources.
+- Conflict errors.
+- Temporary service failures.
+- Unexpected internal errors.
+
+Provide retry options where safe.
+
+Critical actions must remain recoverable after temporary network failures.
+
+---
+
+# 18. TESTING REQUIREMENTS
+
+Do not consider the application complete merely because it compiles.
+
+Implement a meaningful test suite.
+
+Use an appropriate combination of:
+
+- Unit tests.
+- Integration tests.
+- Database/RLS tests.
+- API authorization tests.
+- End-to-end tests.
+
+Test at least the following scenarios.
+
+## Authentication
+
+1. An administrator can sign in.
+2. An employee can sign in.
+3. Invalid credentials are rejected.
+4. An employee cannot access administrative pages.
+5. A deactivated employee cannot continue using protected functionality according to the implemented session-revocation policy.
+
+## Employee management
+
+1. An administrator can create an employee.
+2. Duplicate emails are rejected.
+3. Invalid employee data is rejected.
+4. Unauthorized users cannot create employees.
+5. Employee deactivation works correctly.
+6. Employee deletion or archival preserves the intended historical records.
+
+## Task management
+
+1. An administrator can create a task.
+2. An administrator can assign a task to an employee.
+3. Unauthorized users cannot assign tasks.
+4. An employee can see their own assignments.
+5. An employee cannot see another employee's private assignments.
+6. Multiple employees can have independent progress for the same task.
+
+## Progress
+
+1. An employee can start an assigned task.
+2. The task status changes correctly.
+3. A valid progress update is persisted.
+4. Invalid percentages are rejected.
+5. Unauthorized progress updates are rejected.
+6. Previous progress updates remain available.
+7. Repeated requests do not create inconsistent duplicate operations.
+8. Relevant administrator notifications are created.
+9. Failed operations do not generate false success notifications.
+
+## Completion
+
+1. A task can be submitted for review only when requirements are satisfied.
+2. The manager can approve a submission.
+3. The manager can reject a submission with an explanation.
+4. Rejected work can be revised and resubmitted.
+5. Only approved completion counts toward the official leaderboard.
+6. Approval cannot be forged by an employee.
+
+## Notifications
+
+1. New notifications appear for the correct recipient.
+2. Notifications persist after refresh.
+3. Read/unread state works.
+4. Unauthorized notification access is rejected.
+5. Duplicate processing does not generate unintended duplicate notifications.
+
+## UI
+
+1. Main workflows work on desktop.
+2. Main workflows work on mobile.
+3. Forms display understandable validation errors.
+4. Empty states render correctly.
+5. Loading and error states work.
+6. Navigation respects user roles.
+7. Arabic RTL layouts work correctly if Arabic support is implemented.
+
+Run the tests and report the actual results.
+
+Do not claim a test passed unless it was actually executed successfully.
+
+---
+
+# 19. DEPLOYMENT ON VERCEL AND SUPABASE
+
+Prepare the project for real deployment.
+
+Provide:
+
+- Complete source code.
+- A clear folder structure.
+- Database migrations.
+- Supabase configuration instructions.
+- Required environment variable names.
+- Vercel deployment instructions.
+- Authentication configuration instructions.
+- Redirect URL configuration.
+- Email invitation and password-reset configuration.
+- Realtime configuration.
+- RLS policy setup.
+- Production build instructions.
+- Testing instructions.
+- A README file.
+
+Include an `.env.example` containing placeholders only.
+
+Never include actual credentials in the repository.
+
+The project must work locally before deployment.
+
+Use environment variables appropriate for the framework and runtime.
+
+Clearly distinguish public browser-safe Supabase configuration from privileged server-only secrets.
+
+Do not use a service-role key in any variable exposed through a `NEXT_PUBLIC_` prefix.
+
+Do not assume that Vercel and Supabase are configured merely because deployment instructions exist.
+
+Verify the production build and, where access is available, test the deployed application.
+
+---
+
+# 20. DATABASE MIGRATIONS AND INITIAL ADMINISTRATOR
+
+Create version-controlled migrations for:
+
+- Tables.
+- Foreign keys.
+- Indexes.
+- Constraints.
+- RLS activation.
+- RLS policies.
+- Database functions.
+- Triggers.
+- Notification mechanisms.
+- Any required seed data.
+
+Provide a safe initial administrator provisioning process.
+
+Do not hardcode a permanent administrator password.
+
+Do not create a public registration flow that allows users to select the administrator role.
+
+Prefer a secure, documented setup command or a protected server-side provisioning process.
+
+The process must be repeatable and must not accidentally grant administrator privileges to ordinary employees.
+
+Document how the first administrator is created and how administrative access is recovered if necessary.
+
+---
+
+# 21. IMPLEMENTATION WORKFLOW
+
+Work in phases and verify each phase before proceeding.
+
+## Phase 1: Repository and architecture inspection
+
+If an existing repository is available:
+
+- Inspect the current files.
+- Identify the framework and dependencies.
+- Review existing functionality.
+- Preserve working features unless a change is justified.
+- Identify security issues.
+- Establish an implementation plan.
+
+If starting from scratch:
+
+- Initialize the project.
+- Configure TypeScript.
+- Set up the styling system.
+- Establish the application structure.
+- Configure linting and testing.
+
+Do not overwrite existing work blindly.
+
+## Phase 2: Database and security foundation
+
+- Design the schema.
+- Create migrations.
+- Configure authentication.
+- Implement trusted role management.
+- Enable RLS.
+- Write security policies.
+- Implement core database operations.
+- Test authorization boundaries.
+
+Do not build the entire application on top of an insecure database foundation.
+
+## Phase 3: Shared UI and authentication
+
+- Implement the visual design system.
+- Build the authentication screens.
+- Implement protected routes.
+- Add role-based navigation.
+- Create reusable layout components.
+- Implement loading and error states.
+
+## Phase 4: Administrator features
+
+- Employee management.
+- Task creation and assignment.
+- Task monitoring.
+- Completion review.
+- Notifications.
+- Leaderboard.
+- Reports.
+
+## Phase 5: Employee features
+
+- Employee dashboard.
+- Assigned tasks.
+- Starting tasks.
+- Progress updates.
+- Work descriptions.
+- Completion submissions.
+- Notifications.
+- Task history.
+
+## Phase 6: Integration and realtime
+
+- Connect the database to all relevant interfaces.
+- Implement realtime progress updates.
+- Implement notification delivery.
+- Verify persistence after refresh.
+- Test concurrent updates.
+- Verify that events reach only authorized recipients.
+
+## Phase 7: Quality assurance
+
+- Run linting.
+- Run type checking.
+- Run unit tests.
+- Run integration tests.
+- Run RLS tests.
+- Run end-to-end tests.
+- Fix discovered issues.
+- Test the production build.
+- Review security-sensitive code.
+- Check desktop, mobile, and RTL layouts.
+
+## Phase 8: Deployment readiness
+
+- Prepare environment configuration.
+- Verify migrations.
+- Document deployment.
+- Confirm required secrets.
+- Check authentication redirects.
+- Verify production build.
+- Provide a deployment checklist.
+
+Do not skip security or testing phases to make the project appear complete sooner.
+
+---
+
+# 22. CODING STANDARDS
+
+Follow these rules throughout the project:
+
+- Use TypeScript strict mode.
+- Avoid `any` unless there is a documented and justified reason.
+- Use clear names.
+- Prefer small, reusable components.
+- Keep business logic out of presentation components.
+- Separate database access from UI code.
+- Use consistent error handling.
+- Avoid duplicated business logic.
+- Avoid giant components.
+- Avoid unnecessary abstractions.
+- Keep forms and validation consistent.
+- Use typed database models.
+- Keep secrets server-side.
+- Make important business rules explicit.
+- Write comments for non-obvious security or business logic.
+- Remove dead code.
+- Do not leave critical functionality as TODO comments.
+- Do not substitute fake data for missing backend functionality without clearly labeling it as a development fixture.
+- Do not swallow errors silently.
+- Do not suppress TypeScript errors merely to make the build pass.
+
+Keep the code understandable to a developer who will maintain the project later.
+
+---
+
+# 23. DEFINITION OF DONE
+
+The project is considered complete only when:
+
+1. The application starts successfully in the documented local environment.
+2. The production build succeeds.
+3. Database migrations are available and reproducible.
+4. Authentication works.
+5. Administrator and employee roles are enforced.
+6. Employees can be created and managed securely.
+7. Tasks can be created and assigned.
+8. Employees can start their tasks.
+9. Employees can update progress and add work descriptions.
+10. Progress history is preserved.
+11. Managers receive persistent notifications about task updates.
+12. Realtime updates work where configured.
+13. Employees can submit completed tasks.
+14. Managers can approve or reject submissions.
+15. The leaderboard uses trustworthy completion records.
+16. Unauthorized database operations are rejected.
+17. RLS policies have been tested.
+18. Important workflows have automated tests.
+19. The interface is responsive.
+20. Forms provide proper validation and feedback.
+21. Errors are handled gracefully.
+22. No privileged secrets are exposed to the browser.
+23. The README explains setup, configuration, testing, and deployment.
+24. Known limitations and remaining security considerations are documented.
+
+Do not report a feature as implemented merely because its interface exists.
+
+---
+
+# 24. FINAL DELIVERABLES
+
+At the end, provide:
+
+1. A summary of the implemented system.
+2. The final project folder structure.
+3. The database schema and migration list.
+4. A summary of RLS policies and authorization boundaries.
+5. A list of completed features.
+6. The actual commands used for linting, type checking, testing, and building.
+7. The actual results of those commands.
+8. Any tests that failed or were not executed.
+9. Environment variables required for local development and deployment.
+10. Step-by-step Supabase setup instructions.
+11. Step-by-step Vercel deployment instructions.
+12. Instructions for creating the first administrator.
+13. A list of remaining limitations.
+14. A prioritized list of future improvements.
+
+Do not claim that deployment, email delivery, realtime functionality, or security verification succeeded unless it was actually tested.
+
+---
+
+# 25. EXECUTION INSTRUCTIONS
+
+Start by inspecting the available repository and tools.
+
+If a repository already exists, preserve existing work and adapt the implementation to its current structure.
+
+If starting from scratch, create the complete project structure.
+
+Before making major architectural decisions, briefly explain the decision and its trade-offs.
+
+Then proceed with implementation.
+
+Do not stop after producing a design document, architecture diagram, or sample dashboard.
+
+Do not ask unnecessary questions when a reasonable default can be chosen safely.
+
+If a decision materially affects security, cost, data retention, or the intended workflow, ask a focused clarification question or clearly document the assumption.
+
+If an external service requires credentials or access that you do not have, implement the supported integration, document the required configuration, and continue with independently testable work.
+
+If you cannot execute a command or access a required service, state that limitation honestly.
+
+Prioritize a working, secure MVP over superficial complexity.
+
+Build the application so that it can be maintained, tested, extended, and deployed by another developer.
+
+BEGIN WITH PHASE 1.

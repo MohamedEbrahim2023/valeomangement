@@ -1,0 +1,8 @@
+{
+  "name": "Remix VeloPulse Enterprise — Workforce \u0026 Task Operations",
+  "description": "Enterprise employee management, multi-assignee task tracking, append-only progress monitoring, completion review workflows, and performance analytics backed by PostgreSQL.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
