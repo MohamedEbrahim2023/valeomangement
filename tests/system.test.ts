@@ -372,3 +372,68 @@ describe('2. End-to-End Database, Authorization & Workflow Integration Tests', (
     expect(adminWorkspace.notifications.length).toBeGreaterThan(0);
   });
 });
+
+describe('3. Local RAG Engine (Sentence-Transformers 384-D + FAISS/Chroma Vector DB + Llama 3)', () => {
+  it('generates L2-normalized 384-dimensional embeddings and retrieves accurate chunks for Arabic & English queries', async () => {
+    const {
+      EMBEDDING_DIMENSION,
+      computeSentenceTransformerEmbedding,
+      cosineSimilarity,
+      runLocalRagPipeline,
+    } = await import('../src/lib/local-rag-engine.ts');
+
+    const vecA = computeSentenceTransformerEmbedding('المهام اللي لسة مكتملتش');
+    const vecB = computeSentenceTransformerEmbedding('المهام غير المكتملة التي لم تنتهي بعد');
+    const vecC = computeSentenceTransformerEmbedding('المهام المكتملة بنجاح 100%');
+
+    expect(vecA.length).toBe(EMBEDDING_DIMENSION);
+    const normA = Math.sqrt(vecA.reduce((acc, v) => acc + v * v, 0));
+    expect(normA).toBeCloseTo(1.0, 3);
+
+    // Unfinished query should have higher cosine similarity with unfinished text than completed text
+    expect(cosineSimilarity(vecA, vecB)).toBeGreaterThan(cosineSimilarity(vecA, vecC));
+
+    const admin = await authenticateWithPassword(
+      'admin@velopulse.io',
+      'AdminPass123!'
+    );
+    const workspace = await getAllWorkspaceData(admin);
+
+    // Test unfinished tasks query in Arabic
+    const ragUnfinished = await runLocalRagPipeline({
+      query: 'إيه المهام اللي لسة مكتملتش؟',
+      lang: 'ar',
+      snapshot: workspace,
+    });
+    expect(ragUnfinished.ragTelemetry.retrievedChunks[0].metadata.chunkType).toBe('unfinished_tasks');
+    expect(ragUnfinished.reply).toContain('غير مكتملة');
+
+    // Test completed tasks query in Arabic
+    const ragCompleted = await runLocalRagPipeline({
+      query: 'إيه المهام المكتملة؟',
+      lang: 'ar',
+      snapshot: workspace,
+    });
+    expect(ragCompleted.ragTelemetry.retrievedChunks[0].metadata.chunkType).toBe('completed_tasks');
+    expect(ragCompleted.reply).toContain('مكتملة');
+
+    // Test employee profile + follow-up pronoun resolution
+    const sara = workspace.employees.find((e) => e.email === 'sara.chen@velopulse.io')!;
+    const ragEmp = await runLocalRagPipeline({
+      query: `مهام ${sara.fullName}`,
+      lang: 'ar',
+      snapshot: workspace,
+    });
+    expect(ragEmp.resolvedEmployeeId).toBe(sara.id);
+
+    const ragFollowUp = await runLocalRagPipeline({
+      query: 'آخر مهمة خلصها كانت إيه؟',
+      lang: 'ar',
+      contextEmployeeId: ragEmp.resolvedEmployeeId,
+      snapshot: workspace,
+    });
+    expect(ragFollowUp.resolvedEmployeeId).toBe(sara.id);
+    expect(ragFollowUp.reply).toContain(sara.fullName);
+  });
+});
+

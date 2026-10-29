@@ -94,12 +94,12 @@ export function AddEmployeeModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-employee-title"
     >
-      <div className="bg-white border border-slate-200 rounded-lg max-w-lg w-full p-6">
+      <div className="bg-white border border-slate-200 rounded-lg max-w-lg w-full p-4 sm:p-6 max-h-[92dvh] overflow-y-auto">
         <div className="flex items-center justify-between pb-4 border-b border-slate-200">
           <div>
             <h2
@@ -356,11 +356,11 @@ export function EditEmployeeModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
     >
-      <div className="bg-white border border-slate-200 rounded-lg max-w-lg w-full p-6">
+      <div className="bg-white border border-slate-200 rounded-lg max-w-lg w-full p-4 sm:p-6 max-h-[92dvh] overflow-y-auto">
         <div className="flex items-center justify-between pb-4 border-b border-slate-200">
           <div>
             <h2 className="text-lg font-bold text-slate-900 font-display">
@@ -543,7 +543,7 @@ export function EmployeeDetailDrawer({
       role="dialog"
       aria-modal="true"
     >
-      <div className="bg-white w-full max-w-2xl h-full overflow-y-auto p-6 border-l border-slate-200 flex flex-col justify-between">
+      <div className="bg-white w-full max-w-2xl h-full overflow-y-auto p-4 sm:p-6 border-s border-slate-200 flex flex-col justify-between">
         <div>
           <div className="flex items-start justify-between pb-4 border-b border-slate-200">
             <div>
@@ -902,11 +902,11 @@ export function CreateEditTaskModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
     >
-      <div className="bg-white border border-slate-200 rounded-lg max-w-2xl w-full p-6 my-8 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white border border-slate-200 rounded-lg max-w-2xl w-full p-4 sm:p-6 my-2 sm:my-8 max-h-[92dvh] overflow-y-auto">
         <div className="flex items-center justify-between pb-4 border-b border-slate-200">
           <div>
             <h2 className="text-lg font-bold text-slate-900 font-display">
@@ -1428,11 +1428,11 @@ export function AssignmentActionModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
     >
-      <div className="bg-white border border-slate-200 rounded-lg max-w-3xl w-full p-6 my-8 max-h-[92vh] overflow-y-auto">
+      <div className="bg-white border border-slate-200 rounded-lg max-w-3xl w-full p-4 sm:p-6 my-2 sm:my-8 max-h-[92dvh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200">
           <div>

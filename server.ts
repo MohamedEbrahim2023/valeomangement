@@ -2,7 +2,15 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import fs from 'fs';
+import {
+  EMBEDDING_DIM,
+  EMBEDDING_MODEL_NAME,
+  harvestAndChunkSiteData,
+  LLAMA3_MODEL_NAME,
+  runLocalRagPipeline,
+  VECTOR_DB_ENGINE,
+} from './src/lib/local-rag-engine.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import {
   authenticateWithPassword,
@@ -826,210 +834,137 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
-// AI DATABASE ASSISTANT (SERVER-SIDE GEMINI LLM WITH LIVE POSTGRESQL ACCESS)
+// LOCAL RAG CHATBOT ENGINE (SITE DATA CHUNKING + SENTENCE-TRANSFORMERS 384-D
+// EMBEDDINGS + LOCAL CHROMA/FAISS VECTOR DB + LOCAL LLAMA 3 SYNTHESIS)
 // ---------------------------------------------------------------------------
+
+const VECTOR_STORE_FILE = path.resolve(
+  process.cwd(),
+  '.data',
+  'vector-store-chroma-faiss.json'
+);
+
+function persistLocalVectorStoreIndex(documents: unknown[]) {
+  if (process.env.VITEST === 'true') return;
+  try {
+    const dir = path.dirname(VECTOR_STORE_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(
+      VECTOR_STORE_FILE,
+      JSON.stringify(
+        {
+          engine: VECTOR_DB_ENGINE,
+          embeddingModel: EMBEDDING_MODEL_NAME,
+          dimension: EMBEDDING_DIM,
+          llmModel: LLAMA3_MODEL_NAME,
+          updatedAt: new Date().toISOString(),
+          totalVectors: documents.length,
+          documents,
+        },
+        null,
+        2
+      ),
+      'utf-8'
+    );
+  } catch {
+    // Ignore disk write errors in read-only environments
+  }
+}
+
+app.post(
+  '/api/assistant/reindex',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const data = await getAllWorkspaceData(req.dbUser!);
+      const indexedDocs = harvestAndChunkSiteData({
+        organization: data.organization,
+        currentUser: data.currentUser,
+        summary: data.summary,
+        employees: data.employees,
+        tasks: data.tasks,
+        assignments: data.assignments,
+        activityLogs: data.activityLogs,
+      });
+      persistLocalVectorStoreIndex(indexedDocs);
+      return res.json({
+        status: 'indexed',
+        embeddingModel: EMBEDDING_MODEL_NAME,
+        embeddingDimension: EMBEDDING_DIM,
+        vectorDbEngine: VECTOR_DB_ENGINE,
+        llmModel: LLAMA3_MODEL_NAME,
+        totalVectors: indexedDocs.length,
+        indexedAt: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        error: error?.message || 'Failed to re-index local vector store.',
+      });
+    }
+  }
+);
+
 app.post(
   '/api/assistant/chat',
   requireAuth,
   async (req: AuthRequest, res: Response) => {
     try {
-      const { message, history = [], lang = 'ar' } = req.body || {};
+      const {
+        message,
+        lang = 'ar',
+        topK = 4,
+        lastEmployeeId = null,
+      } = req.body || {};
       if (!message || typeof message !== 'string') {
         return res.status(400).json({ error: 'Message is required.' });
       }
 
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server.',
-          fallback: true,
-        });
-      }
-
-      // Fetch real-time authoritative data from PostgreSQL
+      // 1. Collect live site data from workspace database
       const data = await getAllWorkspaceData(req.dbUser!);
+      const snapshot = {
+        organization: data.organization,
+        currentUser: data.currentUser,
+        summary: data.summary,
+        employees: data.employees,
+        tasks: data.tasks,
+        assignments: data.assignments,
+        activityLogs: data.activityLogs,
+      };
 
-      const activeAssignments = data.assignments
-        .filter((a) => a.status !== 'canceled')
-        .map((a) => ({
-          assignmentId: a.id,
-          taskId: a.taskId,
-          taskTitle: a.task?.title || '',
-          taskDescription: a.task?.description || '',
-          priority: a.task?.priority || '',
-          category: a.task?.category || '',
-          startDate: a.task?.startDate || '',
-          dueDate: a.task?.dueDate || '',
-          employeeId: a.employeeId,
-          employeeName: a.employee?.fullName || '',
-          employeeDepartment: a.employee?.department || '',
-          status: a.status,
-          isCompleted100Percent:
-            a.status === 'approved' || a.progressPercentage === 100,
-          isUnfinished: a.status !== 'approved' && a.progressPercentage < 100,
-          progressPercentage: a.progressPercentage,
-          isOverdue: a.isOverdue,
-          latestNote: a.latestNote,
-          startedAt: a.startedAt,
-          submittedAt: a.submittedAt,
-          completedAt: a.completedAt,
-          updatedAt: a.updatedAt,
-          recentProgressUpdates: (a.progressUpdates || [])
-            .slice(0, 3)
-            .map((u) => ({
-              from: u.previousPercentage,
-              to: u.newPercentage,
-              description: u.description,
-              blockers: u.blockers,
-              createdAt: u.createdAt,
-            })),
-        }));
-
-      const employeesSnapshot = data.employees
-        .filter((e) => e.accountStatus === 'active')
-        .map((e) => ({
-          employeeId: e.id,
-          fullName: e.fullName,
-          email: e.email,
-          role: e.role,
-          department: e.department,
-          jobTitle: e.jobTitle,
-          totalAssignedTasks: e.totalAssigned,
-          approvedCompletedTasks: e.approvedCompleted,
-          inProgressTasks: e.inProgress,
-          awaitingReviewTasks: e.awaitingReview,
-          notStartedTasks: e.notStarted,
-          overdueTasks: e.overdue,
-          completionRatePercent: e.completionRate,
-          onTimeRatePercent: e.onTimeRate,
-          weightedScorePoints: e.weightedScore,
-        }));
-
-      const dbSnapshotJson = JSON.stringify(
-        {
-          currentTimeISO: new Date().toISOString(),
-          organizationName: data.organization.name,
-          loggedInUser: {
-            id: data.currentUser.id,
-            fullName: data.currentUser.fullName,
-            role: data.currentUser.role,
-            department: data.currentUser.department,
-          },
-          platformSummary: data.summary,
-          employees: employeesSnapshot,
-          assignments: activeAssignments,
-          recentActivityLogs: data.activityLogs.slice(0, 10).map((l) => ({
-            actorName: l.actorName,
-            action: l.action,
-            entityType: l.entityType,
-            createdAt: l.createdAt,
-          })),
-        },
-        null,
-        2
-      );
-
-      const recentHistoryText = Array.isArray(history)
-        ? history
-            .slice(-8)
-            .map(
-              (h: any) =>
-                `${h.sender === 'user' ? 'User' : 'Assistant'}: ${h.text}${
-                  Array.isArray(h.bullets) && h.bullets.length
-                    ? '\n' + h.bullets.join('\n')
-                    : ''
-                }`
-            )
-            .join('\n\n')
-        : '';
-
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
+      // 2. Harvest chunks, compute Sentence-Transformers 384-D embeddings,
+      //    persist to local Chroma/FAISS vector store, retrieve top-K chunks,
+      //    and synthesize answer using local Llama 3
+      const empRef = {
+        current:
+          typeof lastEmployeeId === 'number' ? lastEmployeeId : null,
+      };
+      const ragResult = await runLocalRagPipeline({
+        query: message,
+        snapshot,
+        lang: lang === 'en' ? 'en' : 'ar',
+        topK: Number(topK) || 4,
+        lastEmployeeIdRef: empRef,
+        ollamaUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
       });
 
-      const systemInstruction = `أنت المساعد الذكي الرسمي لمنصة "${data.organization.name}" (VeloPulse Enterprise).
-لديك وصول مباشر وكامل وفوري إلى قاعدة بيانات المنصة الحية (PostgreSQL) المرفقة أدناه بصيغة JSON.
-
-قواعد صارمة ودقيقة للإجابة:
-1. افهم كلام المستخدم بذكاء عالٍ سواء كان باللهجة العامية المصرية (مثل: "ايه المهام اللي لسة مكتملتش"، "مين اللي خلص التاسكات بتاعته"، "احر مهمة خلصها كانت ايه"، "مين اشطر موظف") أو باللغة العربية الفصحى أو بالإنجليزية.
-2. اعتمد حصرياً وبأمانة تامة على بيانات قاعدة البيانات الحية المرفقة في (LIVE_DATABASE_SNAPSHOT). لا تخمن ولا تخلط بين المهام المكتملة والمهام غير المكتملة أبداً:
-   - المهام المكتملة (Completed/Finished): هي التي حالتها "approved" أو نسبة إنجازها 100% (isCompleted100Percent: true).
-   - المهام غير المكتملة / التي لم تكتمل بعد / اللي لسة مخلصتش (Unfinished/Incomplete): هي المهام التي نسبة إنجازها أقل من 100% (isUnfinished: true، مثل حالة "not_started" أي 0% لم تبدأ بعد، أو "in_progress" قيد التنفيذ، أو "rejected"). انتبه: قد يكون عنوان المهمة نفسها مكتوباً بالعربية مثل "غير مكتملة"، فاذكر عنوانها بوضوح بين علامتي تنصيص واذكر من الموظف المسندة إليه ونسبتها الحالية (مثلاً 0%).
-3. انتبه لسياق الحوار السابق (CONVERSATION_HISTORY): إذا سأل المستخدم سؤالاً تكميلياً بضمير الغائب (مثل: "آخر مهمة خلصها كانت إيه؟" أو "طب إيه مهامه اللي لسة مخلصتش؟") فإنه يقصد الموظف الذي كان الحديث عنه في الرسالة السابقة.
-4. عند السؤال عن أفضل موظف أو متصدر الأداء، ركز على الموظفين الفعليين (role: "employee" أو من لديهم مهام مسندة) ولا تملأ القائمة بحسابات المديرين الفارغة (0/0).
-5. اجعل إجابتك في حقل "reply" طبيعية، ذكية، مباشرة، وودودة بلغة المستخدم (${lang === 'ar' ? 'العربية' : 'English'})، وضع التفاصيل المنظمة والأرقام في مصفوفة "bullets"، وضع أرقام المهام المرتبطة في "referencedAssignmentIds" وأرقام الموظفين المرتبطين في "referencedEmployeeIds".`;
-
-      const promptContent = `=== LIVE_DATABASE_SNAPSHOT ===
-${dbSnapshotJson}
-
-=== CONVERSATION_HISTORY ===
-${recentHistoryText || 'No prior messages.'}
-
-=== CURRENT_USER_QUESTION ===
-${message}`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: promptContent,
-        config: {
-          systemInstruction,
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              reply: {
-                type: Type.STRING,
-                description:
-                  'Direct, intelligent conversational answer to the user question based on the live database.',
-              },
-              bullets: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description:
-                  'Structured bullet points listing specific tasks, employees, percentages, statuses, or dates relevant to the answer.',
-              },
-              referencedAssignmentIds: {
-                type: Type.ARRAY,
-                items: { type: Type.INTEGER },
-                description:
-                  'List of assignmentId numbers mentioned in the answer.',
-              },
-              referencedEmployeeIds: {
-                type: Type.ARRAY,
-                items: { type: Type.INTEGER },
-                description:
-                  'List of employeeId numbers mentioned in the answer.',
-              },
-            },
-            required: ['reply', 'bullets'],
-          },
-        },
-      });
-
-      const rawText = response.text || '{}';
-      const parsed = JSON.parse(rawText);
+      const indexedDocs = harvestAndChunkSiteData(snapshot);
+      persistLocalVectorStoreIndex(indexedDocs);
 
       return res.json({
-        reply: parsed.reply || '',
-        bullets: Array.isArray(parsed.bullets) ? parsed.bullets : [],
-        referencedAssignmentIds: Array.isArray(parsed.referencedAssignmentIds)
-          ? parsed.referencedAssignmentIds
-          : [],
-        referencedEmployeeIds: Array.isArray(parsed.referencedEmployeeIds)
-          ? parsed.referencedEmployeeIds
-          : [],
-        poweredBy: 'gemini-3.8-flash',
+        reply: ragResult.reply,
+        bullets: ragResult.bullets,
+        referencedAssignmentIds: ragResult.referencedAssignmentIds,
+        referencedEmployeeIds: ragResult.referencedEmployeeIds,
+        resolvedEmployeeId: empRef.current,
+        ragTelemetry: ragResult.ragTelemetry,
+        poweredBy: LLAMA3_MODEL_NAME,
       });
     } catch (error: any) {
-      console.error('AI Assistant error:', error);
+      console.error('Local RAG Assistant error:', error);
       return res.status(500).json({
-        error: error?.message || 'Failed to generate AI response.',
+        error: error?.message || 'Failed to execute local RAG pipeline.',
         fallback: true,
       });
     }

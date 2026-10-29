@@ -516,131 +516,135 @@ export function DeadlinesCalendarView({
         </div>
       </div>
 
-      {/* Calendar Grid */}
+      {/* Calendar Grid (Horizontally scrollable on small phones so 7 columns stay readable) */}
       <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-xs">
-        {/* Days of Week Header */}
-        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
-          {dayHeaders.map((dayName) => (
-            <div
-              key={dayName}
-              className="py-2.5 px-2 text-center text-xs font-bold text-slate-600 border-r last:border-r-0 border-slate-200"
-            >
-              {dayName}
+        <div className="overflow-x-auto">
+          <div className="min-w-[600px] sm:min-w-0">
+            {/* Days of Week Header */}
+            <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
+              {dayHeaders.map((dayName) => (
+                <div
+                  key={dayName}
+                  className="py-2.5 px-2 text-center text-xs font-bold text-slate-600 border-r last:border-r-0 border-slate-200"
+                >
+                  {dayName}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        {/* Calendar Cells */}
-        <div className="grid grid-cols-7 divide-x divide-y divide-slate-200">
-          {calendarDays.map((cell) => {
-            const dayItems = assignmentsByDate.get(cell.key) || [];
-            const isToday = cell.key === todayKey;
-            const isSelected = cell.key === selectedDateKey;
-            const hasOverdue = dayItems.some(
-              (a) => a.isOverdue && a.status !== 'approved'
-            );
+            {/* Calendar Cells */}
+            <div className="grid grid-cols-7 divide-x divide-y divide-slate-200">
+              {calendarDays.map((cell) => {
+                const dayItems = assignmentsByDate.get(cell.key) || [];
+                const isToday = cell.key === todayKey;
+                const isSelected = cell.key === selectedDateKey;
+                const hasOverdue = dayItems.some(
+                  (a) => a.isOverdue && a.status !== 'approved'
+                );
 
-            return (
-              <div
-                key={cell.key}
-                onClick={() => setSelectedDateKey(cell.key)}
-                className={`p-2 transition-colors cursor-pointer flex flex-col justify-between ${
-                  viewMode === 'week' ? 'min-h-[260px]' : 'min-h-[125px]'
-                } ${
-                  !cell.isCurrentMonth && viewMode === 'month'
-                    ? 'bg-slate-50/60 text-slate-400'
-                    : 'bg-white'
-                } ${
-                  isSelected
-                    ? 'ring-2 ring-inset ring-indigo-600 bg-indigo-50/20'
-                    : 'hover:bg-slate-50/80'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <span
-                    className={`inline-flex items-center justify-center w-6 h-6 text-xs font-mono font-bold rounded-full ${
-                      isToday
-                        ? 'bg-indigo-700 text-white'
-                        : cell.isCurrentMonth
-                        ? 'text-slate-900'
-                        : 'text-slate-400'
+                return (
+                  <div
+                    key={cell.key}
+                    onClick={() => setSelectedDateKey(cell.key)}
+                    className={`p-2 transition-colors cursor-pointer flex flex-col justify-between ${
+                      viewMode === 'week' ? 'min-h-[260px]' : 'min-h-[125px]'
+                    } ${
+                      !cell.isCurrentMonth && viewMode === 'month'
+                        ? 'bg-slate-50/60 text-slate-400'
+                        : 'bg-white'
+                    } ${
+                      isSelected
+                        ? 'ring-2 ring-inset ring-indigo-600 bg-indigo-50/20'
+                        : 'hover:bg-slate-50/80'
                     }`}
                   >
-                    {cell.date.getDate()}
-                  </span>
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <span
+                        className={`inline-flex items-center justify-center w-6 h-6 text-xs font-mono font-bold rounded-full ${
+                          isToday
+                            ? 'bg-indigo-700 text-white'
+                            : cell.isCurrentMonth
+                            ? 'text-slate-900'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {cell.date.getDate()}
+                      </span>
 
-                  {dayItems.length > 0 && (
-                    <span
-                      className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                        hasOverdue
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      {dayItems.length} {ar ? 'مهام' : 'tasks'}
-                    </span>
-                  )}
-                </div>
-
-                {/* Task Pills inside Cell */}
-                <div className="space-y-1 flex-1 overflow-y-auto max-h-40">
-                  {dayItems
-                    .slice(0, viewMode === 'week' ? 8 : 3)
-                    .map((assign) => {
-                      const style = getAssignmentBadgeStyle(assign);
-                      return (
-                        <button
-                          key={assign.id}
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedDateKey(cell.key);
-                            onInspectAssignment(
-                              assign,
-                              isAdmin && assign.status === 'awaiting_review'
-                                ? 'review'
-                                : !isAdmin &&
-                                  (assign.status === 'in_progress' ||
-                                    assign.status === 'rejected')
-                                ? 'update'
-                                : 'history'
-                            );
-                          }}
-                          className={`w-full text-right px-2 py-1 rounded border text-[11px] transition-colors flex flex-col gap-0.5 cursor-pointer ${style.bg}`}
+                      {dayItems.length > 0 && (
+                        <span
+                          className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                            hasOverdue
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
                         >
-                          <div className="flex items-center justify-between gap-1 w-full">
-                            <span className="font-semibold truncate">
-                              {assign.task?.title}
-                            </span>
-                            <span
-                              className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`}
-                            />
-                          </div>
-                          <div className="flex items-center justify-between text-[10px] opacity-85 w-full">
-                            <span className="truncate">
-                              {isAdmin
-                                ? assign.employee?.fullName.split(' ')[0]
-                                : assign.task?.priority}
-                            </span>
-                            <span className="font-mono font-bold shrink-0">
-                              {style.label}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                          {dayItems.length} {ar ? 'مهام' : 'tasks'}
+                        </span>
+                      )}
+                    </div>
 
-                  {dayItems.length > (viewMode === 'week' ? 8 : 3) && (
-                    <p className="text-[10px] font-semibold text-indigo-700 text-center pt-0.5">
-                      +
-                      {dayItems.length - (viewMode === 'week' ? 8 : 3)}{' '}
-                      {ar ? 'مهام أخرى' : 'more'}
-                    </p>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                    {/* Task Pills inside Cell */}
+                    <div className="space-y-1 flex-1 overflow-y-auto max-h-40">
+                      {dayItems
+                        .slice(0, viewMode === 'week' ? 8 : 3)
+                        .map((assign) => {
+                          const style = getAssignmentBadgeStyle(assign);
+                          return (
+                            <button
+                              key={assign.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedDateKey(cell.key);
+                                onInspectAssignment(
+                                  assign,
+                                  isAdmin && assign.status === 'awaiting_review'
+                                    ? 'review'
+                                    : !isAdmin &&
+                                      (assign.status === 'in_progress' ||
+                                        assign.status === 'rejected')
+                                    ? 'update'
+                                    : 'history'
+                                );
+                              }}
+                              className={`w-full text-right px-2 py-1 rounded border text-[11px] transition-colors flex flex-col gap-0.5 cursor-pointer ${style.bg}`}
+                            >
+                              <div className="flex items-center justify-between gap-1 w-full">
+                                <span className="font-semibold truncate">
+                                  {assign.task?.title}
+                                </span>
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] opacity-85 w-full">
+                                <span className="truncate">
+                                  {isAdmin
+                                    ? assign.employee?.fullName.split(' ')[0]
+                                    : assign.task?.priority}
+                                </span>
+                                <span className="font-mono font-bold shrink-0">
+                                  {style.label}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+
+                      {dayItems.length > (viewMode === 'week' ? 8 : 3) && (
+                        <p className="text-[10px] font-semibold text-indigo-700 text-center pt-0.5">
+                          +
+                          {dayItems.length - (viewMode === 'week' ? 8 : 3)}{' '}
+                          {ar ? 'مهام أخرى' : 'more'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 

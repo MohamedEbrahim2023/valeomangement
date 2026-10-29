@@ -713,27 +713,37 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
-      {/* Sidebar Navigation (260px on desktop) */}
+    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row overflow-x-hidden">
+      {/* Mobile Slide-Over Backdrop Overlay */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs md:hidden"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar Navigation (Slide-over drawer on mobile, 260px static on desktop) */}
       <aside
-        className={`w-full md:w-64 bg-white border-b md:border-b-0 md:border-r border-slate-200 shrink-0 flex flex-col justify-between ${
-          mobileMenuOpen ? 'block' : 'hidden md:flex'
+        className={`fixed inset-y-0 start-0 z-50 w-72 max-w-[85vw] md:static md:w-64 bg-white border-e border-slate-200 shadow-2xl md:shadow-none shrink-0 flex flex-col justify-between overflow-y-auto transition-transform ${
+          mobileMenuOpen ? 'flex' : 'hidden md:flex'
         }`}
       >
-        <div className="p-5 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-base font-bold tracking-tight text-slate-900 font-display">
+        <div className="p-4 sm:p-5 space-y-5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <span className="text-base font-bold tracking-tight text-slate-900 font-display block truncate">
                 {organization?.name || t.appName}
               </span>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 mt-0.5 truncate">
                 {isAdmin ? t.roleAdmin : t.roleEmployee} · {currentUser.department}
               </p>
             </div>
             <button
               type="button"
               onClick={() => setMobileMenuOpen(false)}
-              className="md:hidden p-1 text-slate-500"
+              className="md:hidden p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md"
+              aria-label="Close menu"
             >
               <X className="w-5 h-5" />
             </button>
@@ -750,7 +760,7 @@ export default function App() {
                     setActiveSection(item.id);
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3 py-2.5 sm:py-2 rounded-md text-xs font-medium transition-colors cursor-pointer ${
                     active
                       ? 'bg-indigo-50 text-indigo-800 font-semibold'
                       : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
@@ -761,7 +771,7 @@ export default function App() {
                     <span className="truncate">{item.label}</span>
                   </span>
                   {item.badge !== undefined && (
-                    <span className="font-mono text-xs font-bold text-indigo-700">
+                    <span className="font-mono text-xs font-bold text-indigo-700 px-1.5 py-0.5 bg-indigo-100/70 rounded">
                       {item.badge}
                     </span>
                   )}
@@ -794,37 +804,40 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Header following SaaS Top Bar Contract */}
-        <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen((v) => !v)}
-              className="md:hidden p-1.5 text-slate-600 hover:text-slate-900 border border-slate-200 rounded"
+              className="md:hidden p-2 text-slate-700 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md shrink-0"
               aria-label="Open menu"
             >
               <Menu className="w-4 h-4" />
             </button>
             <div className="text-xs text-slate-500 truncate">
-              <span className="font-medium text-slate-900">
+              <span className="font-semibold text-slate-900 hidden sm:inline">
                 {organization?.name || t.appName}
               </span>
-              <span aria-hidden="true"> / </span>
-              <span className="capitalize">
+              <span className="hidden sm:inline" aria-hidden="true">
+                {' '}
+                /{' '}
+              </span>
+              <span className="font-bold sm:font-medium text-slate-900 sm:text-slate-600 capitalize">
                 {navItems.find((i) => i.id === activeSection)?.label ||
                   activeSection}
               </span>
               {realtimeConnected && (
-                <>
+                <span className="hidden lg:inline">
                   <span aria-hidden="true"> · </span>
                   <span className="text-emerald-700 font-medium">
                     {t.liveConnected}
                   </span>
-                </>
+                </span>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Sound Chime Toggle Button */}
             <button
               type="button"
@@ -834,7 +847,7 @@ export default function App() {
                   ? 'التنبيهات الصوتية مفعّلة (اضغط للكتم)'
                   : 'التنبيهات الصوتية مكتومة (اضغط للتفعيل)'
               }
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 soundEnabled
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
                   : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
@@ -845,7 +858,7 @@ export default function App() {
               ) : (
                 <VolumeX className="w-3.5 h-3.5 text-slate-400" />
               )}
-              <span className="hidden sm:inline">
+              <span className="hidden md:inline">
                 {lang === 'ar'
                   ? soundEnabled
                     ? 'الصوت مفعّل'
@@ -861,14 +874,14 @@ export default function App() {
               type="button"
               onClick={handleEnableOrTestDesktopAlerts}
               title="تفعيل أو تجربة إشعارات سطح المكتب والنغمة الصوتية"
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 desktopNotifPerm === 'granted'
                   ? 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
                   : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
               }`}
             >
               <BellRing className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
+              <span className="hidden lg:inline">
                 {lang === 'ar'
                   ? desktopNotifPerm === 'granted'
                     ? 'تجربة الإشعار'
@@ -882,48 +895,50 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveSection('guide')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+              title={lang === 'ar' ? 'دليل المستخدم (PDF)' : 'User Guide (PDF)'}
+              className="inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>دليل المستخدم (PDF)</span>
+              <span className="hidden sm:inline">دليل المستخدم (PDF)</span>
             </button>
 
             <button
               type="button"
               onClick={() => fetchWorkspace(authToken)}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+              title={t.refreshData}
+              className="inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
             >
               <RefreshCw
                 className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`}
               />
-              <span>{t.refreshData}</span>
+              <span className="hidden sm:inline">{t.refreshData}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setLang((l) => (l === 'en' ? 'ar' : 'en'))}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center justify-center gap-1 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Globe className="w-3.5 h-3.5" />
-              <span>{lang === 'en' ? 'العربية' : 'English'}</span>
+              <span>{lang === 'en' ? 'العربية' : 'EN'}</span>
             </button>
           </div>
         </header>
 
         {/* Live Real-Time Desktop & Sound Alert Pop-up Banner */}
         {liveAlertBanner && (
-          <div className="px-6 pt-4">
+          <div className="px-3.5 sm:px-6 pt-3 sm:pt-4">
             <div
               role="alert"
-              className="p-3.5 rounded-lg border border-indigo-300 bg-indigo-950 text-white shadow-md flex flex-wrap items-center justify-between gap-3 text-xs"
+              className="p-3 sm:p-3.5 rounded-lg border border-indigo-300 bg-indigo-950 text-white shadow-md flex flex-wrap items-center justify-between gap-3 text-xs"
             >
-              <div className="flex items-start gap-3">
+              <div className="flex items-start gap-2.5 sm:gap-3">
                 <div className="w-8 h-8 rounded-md bg-indigo-600 flex items-center justify-center shrink-0 mt-0.5">
                   <BellRing className="w-4 h-4 text-white animate-bounce" />
                 </div>
                 <div>
-                  <p className="font-bold text-white text-sm">
+                  <p className="font-bold text-white text-xs sm:text-sm">
                     {liveAlertBanner.title}
                   </p>
                   <p className="text-indigo-200 mt-0.5">
@@ -972,7 +987,7 @@ export default function App() {
 
         {/* Toast Banner */}
         {toast && (
-          <div className="px-6 pt-4">
+          <div className="px-3.5 sm:px-6 pt-3 sm:pt-4">
             <div
               role="status"
               className={`p-3 rounded-md border flex items-center justify-between text-xs font-medium ${
@@ -1001,7 +1016,7 @@ export default function App() {
         )}
 
         {error && (
-          <div className="px-6 pt-4">
+          <div className="px-3.5 sm:px-6 pt-3 sm:pt-4">
             <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-800 flex items-center justify-between">
               <span>{error}</span>
               <button
@@ -1016,7 +1031,7 @@ export default function App() {
         )}
 
         {/* Active Section Viewport */}
-        <main className="flex-1 p-6 max-w-[1400px] w-full mx-auto">
+        <main className="flex-1 p-3.5 sm:p-6 pb-28 md:pb-8 max-w-[1400px] w-full mx-auto overflow-x-hidden">
           {activeSection === 'guide' && (
             <UserGuideView onClose={() => setActiveSection('overview')} />
           )}
@@ -1320,6 +1335,116 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Mobile Fixed Bottom Navigation Bar (< md) */}
+      <nav
+        aria-label="Mobile bottom navigation"
+        className="fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-1 py-1.5 flex items-center justify-around md:hidden shadow-lg"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveSection('overview')}
+          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+            activeSection === 'overview'
+              ? 'text-indigo-700 font-bold'
+              : 'text-slate-600'
+          }`}
+        >
+          <LayoutDashboard className="w-4 h-4" />
+          <span className="truncate max-w-[64px]">
+            {lang === 'ar'
+              ? isAdmin
+                ? 'الرئيسية'
+                : 'مهامي'
+              : isAdmin
+              ? 'Overview'
+              : 'My Tasks'}
+          </span>
+        </button>
+
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => setActiveSection('tasks')}
+            className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+              activeSection === 'tasks'
+                ? 'text-indigo-700 font-bold'
+                : 'text-slate-600'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            <span className="truncate max-w-[64px]">
+              {lang === 'ar' ? 'المهام' : 'Tasks'}
+            </span>
+            {pendingReviewCount > 0 && (
+              <span className="absolute top-0.5 end-2 w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
+                {pendingReviewCount}
+              </span>
+            )}
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('calendar')}
+          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+            activeSection === 'calendar'
+              ? 'text-indigo-700 font-bold'
+              : 'text-slate-600'
+          }`}
+        >
+          <Calendar className="w-4 h-4" />
+          <span className="truncate max-w-[64px]">
+            {lang === 'ar' ? 'التقويم' : 'Calendar'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('leaderboard')}
+          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+            activeSection === 'leaderboard'
+              ? 'text-indigo-700 font-bold'
+              : 'text-slate-600'
+          }`}
+        >
+          <Trophy className="w-4 h-4" />
+          <span className="truncate max-w-[64px]">
+            {lang === 'ar' ? 'لوحة الشرف' : 'Ranks'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('notifications')}
+          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+            activeSection === 'notifications'
+              ? 'text-indigo-700 font-bold'
+              : 'text-slate-600'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span className="truncate max-w-[64px]">
+            {lang === 'ar' ? 'الإشعارات' : 'Alerts'}
+          </span>
+          {unreadNotifCount > 0 && (
+            <span className="absolute top-0.5 end-2 w-4 h-4 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center">
+              {unreadNotifCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(true)}
+          className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium text-slate-600 min-w-[52px]"
+        >
+          <Menu className="w-4 h-4" />
+          <span className="truncate max-w-[60px]">
+            {lang === 'ar' ? 'المزيد' : 'More'}
+          </span>
+        </button>
+      </nav>
 
       {/* Built-in Native Site Database AI Assistant */}
       <SiteDataAssistant
