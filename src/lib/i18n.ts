@@ -42,6 +42,7 @@ export function translateEventType(eventType: string, lang?: Language): string {
     ORG_SETTINGS_UPDATED: 'تحديث إعدادات المؤسسة',
     PASSWORD_CHANGED: 'تغيير كلمة المرور',
     PASSWORD_RESET_BY_ADMIN: 'إعادة تعيين كلمة مرور',
+    CHAT_MESSAGE_RECEIVED: 'رسالة دردشة فورية جديدة',
   };
   return map[eventType] || eventType;
 }
@@ -106,6 +107,18 @@ export function translateNotificationTitle(
   const empMatch = title.match(/^(?:New )?Employee (?:Added|Created):\s*(.+)$/i);
   if (empMatch) {
     return `تمت إضافة موظف جديد: ${empMatch[1]}`;
+  }
+
+  // Match "New Chat Message from Name"
+  const chatDmMatch = title.match(/^New Chat Message from\s*(.+)$/i);
+  if (chatDmMatch) {
+    return `💬 رسالة جديدة من ${chatDmMatch[1]}`;
+  }
+
+  // Match "Team Chat (Name)"
+  const teamChatMatch = title.match(/^Team Chat \((.+)\)$/i);
+  if (teamChatMatch) {
+    return `💬 دردشة الفريق (${teamChatMatch[1]})`;
   }
 
   return title;

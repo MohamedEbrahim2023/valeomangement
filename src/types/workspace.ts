@@ -193,6 +193,65 @@ export interface ActivityLogRecord {
   createdAt: string;
 }
 
+export interface ChatContact {
+  id: number;
+  uid: string;
+  fullName: string;
+  email: string;
+  role: 'admin' | 'employee';
+  department: string;
+  jobTitle: string;
+  employeeNumber: string | null;
+  accountStatus: 'active' | 'deactivated' | 'invited';
+  isOnline: boolean;
+  lastSeenAt: string;
+  lastActivityAt: string;
+  unreadCount: number;
+  lastMessage?: {
+    id: number;
+    senderId: number;
+    recipientId: number | null;
+    body: string;
+    createdAt: string;
+    deliveredAt: string | null;
+    readAt: string | null;
+  } | null;
+}
+
+export interface ChatReactionUser {
+  userId: number;
+  userName: string;
+}
+
+export interface ChatReplyPreview {
+  id: number;
+  senderId: number;
+  senderName: string;
+  body: string;
+}
+
+export interface ChatMessageRecord {
+  id: number;
+  organizationId: number;
+  senderId: number;
+  senderName: string;
+  senderRole: 'admin' | 'employee';
+  senderDepartment: string;
+  recipientId: number | null; // null = General Team & Admin Room
+  recipientName: string | null;
+  body: string;
+  replyToMessageId?: number | null;
+  replyToMessage?: ChatReplyPreview | null;
+  reactions?: Record<string, ChatReactionUser[]>;
+  isPinned?: boolean;
+  pinnedBy?: number | null;
+  pinnedByName?: string | null;
+  pinnedAt?: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
 export interface WorkspacePayload {
   organization: OrganizationData;
   currentUser: CurrentUser;
@@ -203,4 +262,8 @@ export interface WorkspacePayload {
   notifications: NotificationRecord[];
   leaderboard: EmployeeStat[];
   activityLogs: ActivityLogRecord[];
+  chatContacts?: ChatContact[];
+  chatMessages?: ChatMessageRecord[];
+  onlineUserIds?: number[];
 }
+

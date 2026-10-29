@@ -3,6 +3,7 @@ import { db, isPostgresConfigured, pool } from './index.ts';
 import { getLocalDb, nextId, saveLocalDb } from './local-store.ts';
 import {
   activityLogs,
+  chatMessages,
   notifications,
   organizations,
   taskAssignments,
@@ -14,8 +15,70 @@ import {
   users,
 } from './schema.ts';
 import { hashPassword, verifyPassword } from '../lib/security.ts';
+import {
+  ChatContact,
+  ChatMessageRecord,
+  ChatReactionUser,
+  ChatReplyPreview,
+} from '../types/workspace.ts';
 
 export type UserRecord = typeof users.$inferSelect;
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
+
+export const ALLOWED_CHAT_REACTIONS = ['👍', '✅', '❤️', '🔥', '👏', '😂'] as const;
+
+function parseReactionsJson(raw: string | null | undefined): Record<string, ChatReactionUser[]> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, ChatReactionUser[]>;
+    }
+  } catch {
+    // Ignore malformed JSON
+  }
+  return {};
+}
+
+// Live presence tracker (in-memory active SSE connections + recent HTTP heartbeat within 75s)
+const activeSseUserCounts = new Map<number, number>();
+const recentHeartbeatByUser = new Map<number, number>();
+
+export function markUserConnectedSse(userId: number): void {
+  activeSseUserCounts.set(userId, (activeSseUserCounts.get(userId) || 0) + 1);
+  recentHeartbeatByUser.set(userId, Date.now());
+}
+
+export function markUserDisconnectedSse(userId: number): void {
+  const current = activeSseUserCounts.get(userId) || 0;
+  if (current <= 1) {
+    activeSseUserCounts.delete(userId);
+    recentHeartbeatByUser.delete(userId);
+  } else {
+    activeSseUserCounts.set(userId, current - 1);
+  }
+}
+
+export function recordUserHeartbeat(userId: number): void {
+  recentHeartbeatByUser.set(userId, Date.now());
+}
+
+export function isUserOnlineNow(userId: number, _lastActivityAt?: Date | string | null): boolean {
+  if ((activeSseUserCounts.get(userId) || 0) > 0) {
+    return true;
+  }
+  const hb = recentHeartbeatByUser.get(userId);
+  if (hb && Date.now() - hb < 75_000) {
+    return true;
+  }
+  return false;
+}
+
+export function getOnlineUserIdsList(allUsers: UserRecord[]): number[] {
+  return allUsers
+    .filter((u) => !u.deletedAt && u.accountStatus === 'active' && isUserOnlineNow(u.id, u.lastActivityAt))
+    .map((u) => u.id);
+}
 
 function isAdminEmail(email: string): boolean {
   const clean = email.trim().toLowerCase();
@@ -215,6 +278,28 @@ export async function ensureDatabaseSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_progress_assignment_created ON task_progress_updates (assignment_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_notifications_recipient_read_created ON notifications (recipient_id, read_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_activity_logs_org_created ON activity_logs (organization_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL DEFAULT 1,
+        sender_id INTEGER NOT NULL,
+        recipient_id INTEGER,
+        body TEXT NOT NULL,
+        reply_to_message_id INTEGER,
+        reactions_json TEXT DEFAULT '{}',
+        is_pinned BOOLEAN NOT NULL DEFAULT false,
+        pinned_by INTEGER,
+        pinned_at TIMESTAMP,
+        delivered_at TIMESTAMP,
+        read_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reply_to_message_id INTEGER;
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reactions_json TEXT DEFAULT '{}';
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS pinned_by INTEGER;
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP;
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_recipient_created ON chat_messages (sender_id, recipient_id, created_at DESC);
     `);
   } catch {
     // Schema already managed by database administrator role
@@ -290,8 +375,9 @@ export async function ensureSeedData(): Promise<void> {
       }
     }
 
-    // Seed test employees when running automated test suite
-    if (process.env.VITEST === 'true') {
+    // Seed initial team members when no employees exist yet (or in test environment)
+    const hasEmployeeUsers = state.users.some((u) => u.role === 'employee');
+    if (process.env.VITEST === 'true' || !hasEmployeeUsers) {
       const empHash = hashPassword('Employee123!');
       const testEmployees = [
         {
@@ -325,7 +411,7 @@ export async function ensureSeedData(): Promise<void> {
             accountStatus: 'active',
             passwordHash: empHash,
             mustChangePassword: false,
-            lastActivityAt: now,
+            lastActivityAt: new Date(Date.now() - (emp.employeeNumber === 'EMP-101' ? 120_000 : 1_800_000)),
             deletedAt: null,
             createdAt: now,
             updatedAt: now,
@@ -382,6 +468,50 @@ export async function ensureSeedData(): Promise<void> {
             createdAt: now,
           });
         }
+      }
+    }
+
+    // Seed initial welcome messages in chat if empty
+    if (state.chatMessages.length === 0 && state.users.length >= 2) {
+      const adminUser = state.users.find((u) => u.role === 'admin') || state.users[0];
+      const firstEmp = state.users.find((u) => u.role === 'employee');
+      const earlier = new Date(Date.now() - 15 * 60_000);
+      const welcomeMsgId = nextId('chatMessages');
+      state.chatMessages.push({
+        id: welcomeMsgId,
+        organizationId: orgId,
+        senderId: adminUser.id,
+        recipientId: null,
+        body: '📌 Welcome to VeloPulse Real-Time Team Chat! Important sprint announcements will be pinned here. Feel free to reply to any message or react with 👍 ✅ ❤️ 🔥.',
+        replyToMessageId: null,
+        reactionsJson: JSON.stringify({
+          '👍': firstEmp ? [{ userId: firstEmp.id, userName: firstEmp.fullName }] : [],
+          '🔥': [{ userId: adminUser.id, userName: adminUser.fullName }],
+        }),
+        isPinned: true,
+        pinnedBy: adminUser.id,
+        pinnedAt: earlier,
+        deliveredAt: earlier,
+        readAt: earlier,
+        createdAt: earlier,
+      });
+      if (firstEmp) {
+        const recent = new Date(Date.now() - 5 * 60_000);
+        state.chatMessages.push({
+          id: nextId('chatMessages'),
+          organizationId: orgId,
+          senderId: firstEmp.id,
+          recipientId: adminUser.id,
+          body: 'Hello Admin! I am reviewing the assigned sprint tasks and will update progress shortly.',
+          replyToMessageId: null,
+          reactionsJson: '{}',
+          isPinned: false,
+          pinnedBy: null,
+          pinnedAt: null,
+          deliveredAt: recent,
+          readAt: null,
+          createdAt: recent,
+        });
       }
     }
 
@@ -592,6 +722,24 @@ export async function getUserByUid(uid: string): Promise<UserRecord | null> {
   } catch (error) {
     console.error('Database error in getUserByUid:', error);
     throw new Error('Failed to fetch user profile.', { cause: error });
+  }
+}
+
+export async function getUserByEmail(email: string): Promise<UserRecord | null> {
+  await ensureSeedData();
+  const cleanEmail = email.trim().toLowerCase();
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    return state.users.find((u) => u.email.toLowerCase() === cleanEmail) || null;
+  }
+
+  try {
+    const rows = await db.select().from(users).where(eq(users.email, cleanEmail));
+    return rows[0] || null;
+  } catch (error) {
+    console.error('Database error in getUserByEmail:', error);
+    return null;
   }
 }
 
@@ -899,9 +1047,826 @@ export async function notifyUser(params: {
   }
 }
 
+export async function touchUserLastActivity(userId: number): Promise<void> {
+  recordUserHeartbeat(userId);
+  const now = new Date();
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    const user = state.users.find((u) => u.id === userId);
+    if (user) {
+      user.lastActivityAt = now;
+    }
+    return;
+  }
+  try {
+    await db
+      .update(users)
+      .set({ lastActivityAt: now })
+      .where(eq(users.id, userId));
+  } catch {
+    // Non-blocking heartbeat update
+  }
+}
+
+function enrichChatMessageRow(
+  row: ChatMessageRow,
+  userMap: Map<number, UserRecord>,
+  messageMap: Map<number, ChatMessageRow>
+): ChatMessageRecord {
+  const sender = userMap.get(row.senderId);
+  const recipient = row.recipientId ? userMap.get(row.recipientId) : null;
+  const pinnedByUser = row.pinnedBy ? userMap.get(row.pinnedBy) : null;
+
+  let replyToMessage: ChatReplyPreview | null = null;
+  if (row.replyToMessageId) {
+    const parentRow = messageMap.get(row.replyToMessageId);
+    if (parentRow) {
+      const parentSender = userMap.get(parentRow.senderId);
+      replyToMessage = {
+        id: parentRow.id,
+        senderId: parentRow.senderId,
+        senderName: parentSender?.fullName || 'Team Member',
+        body: parentRow.body,
+      };
+    }
+  }
+
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    senderId: row.senderId,
+    senderName: sender?.fullName || 'Team Member',
+    senderRole: (sender?.role as 'admin' | 'employee') || 'employee',
+    senderDepartment: sender?.department || 'Operations',
+    recipientId: row.recipientId,
+    recipientName: recipient ? recipient.fullName : null,
+    body: row.body,
+    replyToMessageId: row.replyToMessageId ?? null,
+    replyToMessage,
+    reactions: parseReactionsJson(row.reactionsJson),
+    isPinned: Boolean(row.isPinned),
+    pinnedBy: row.pinnedBy ?? null,
+    pinnedByName: pinnedByUser ? pinnedByUser.fullName : null,
+    pinnedAt: row.pinnedAt ? new Date(row.pinnedAt).toISOString() : null,
+    deliveredAt: row.deliveredAt
+      ? new Date(row.deliveredAt).toISOString()
+      : null,
+    readAt: row.readAt ? new Date(row.readAt).toISOString() : null,
+    createdAt: new Date(row.createdAt).toISOString(),
+  };
+}
+
+export async function sendChatMessage(params: {
+  sender: UserRecord;
+  recipientId: number | null;
+  body: string;
+  replyToMessageId?: number | null;
+  pinAnnouncement?: boolean;
+}): Promise<{
+  message: ChatMessageRecord;
+  recipient: UserRecord | null;
+}> {
+  await ensureSeedData();
+  const cleanBody = params.body.trim();
+  if (!cleanBody) {
+    throw new Error('Message body cannot be empty.');
+  }
+  const now = new Date();
+  recordUserHeartbeat(params.sender.id);
+  const shouldPin =
+    Boolean(params.pinAnnouncement) && params.sender.role === 'admin';
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    let recipient: UserRecord | null = null;
+    if (params.recipientId !== null) {
+      recipient =
+        state.users.find(
+          (u) => u.id === params.recipientId && !u.deletedAt
+        ) || null;
+      if (!recipient) {
+        throw new Error('Recipient user not found.');
+      }
+    }
+
+    let validReplyId: number | null = null;
+    if (params.replyToMessageId) {
+      const targetReply = state.chatMessages.find(
+        (m) => m.id === Number(params.replyToMessageId)
+      );
+      if (targetReply) {
+        validReplyId = targetReply.id;
+      }
+    }
+
+    // If recipient is currently online, mark as delivered immediately!
+    const isRecipientOnline =
+      params.recipientId === null
+        ? true
+        : Boolean(
+            recipient &&
+              isUserOnlineNow(recipient.id, recipient.lastActivityAt)
+          );
+
+    const createdRow: ChatMessageRow = {
+      id: nextId('chatMessages'),
+      organizationId: params.sender.organizationId || 1,
+      senderId: params.sender.id,
+      recipientId: params.recipientId,
+      body: cleanBody,
+      replyToMessageId: validReplyId,
+      reactionsJson: '{}',
+      isPinned: shouldPin,
+      pinnedBy: shouldPin ? params.sender.id : null,
+      pinnedAt: shouldPin ? now : null,
+      deliveredAt: isRecipientOnline ? now : null,
+      readAt: null,
+      createdAt: now,
+    };
+    state.chatMessages.push(createdRow);
+
+    // Update sender lastActivityAt
+    const senderInState = state.users.find((u) => u.id === params.sender.id);
+    if (senderInState) {
+      senderInState.lastActivityAt = now;
+    }
+
+    // Create notification for direct message recipient or admins/members
+    if (recipient && recipient.id !== params.sender.id) {
+      state.notifications.push({
+        id: nextId('notifications'),
+        recipientId: recipient.id,
+        actorId: params.sender.id,
+        eventType: 'CHAT_MESSAGE_RECEIVED',
+        title: `New Chat Message from ${params.sender.fullName}`,
+        body:
+          cleanBody.length > 90 ? `${cleanBody.slice(0, 90)}...` : cleanBody,
+        relatedTaskId: null,
+        relatedAssignmentId: null,
+        idempotencyKey: null,
+        readAt: null,
+        createdAt: now,
+      });
+    } else if (params.recipientId === null) {
+      // General room message: notify active members who aren't the sender
+      const others = state.users.filter(
+        (u) =>
+          !u.deletedAt &&
+          u.accountStatus === 'active' &&
+          u.id !== params.sender.id
+      );
+      // Deduplicate admin aliases so we don't spam multiple default admin accounts
+      const seenNames = new Set<string>();
+      for (const other of others) {
+        const key = `${other.role}:${other.fullName}`;
+        if (other.role === 'admin' && seenNames.has(key)) continue;
+        seenNames.add(key);
+        state.notifications.push({
+          id: nextId('notifications'),
+          recipientId: other.id,
+          actorId: params.sender.id,
+          eventType: 'CHAT_MESSAGE_RECEIVED',
+          title: shouldPin
+            ? `📌 Pinned Announcement (${params.sender.fullName})`
+            : `Team Chat (${params.sender.fullName})`,
+          body:
+            cleanBody.length > 90 ? `${cleanBody.slice(0, 90)}...` : cleanBody,
+          relatedTaskId: null,
+          relatedAssignmentId: null,
+          idempotencyKey: null,
+          readAt: null,
+          createdAt: now,
+        });
+      }
+    }
+
+    saveLocalDb();
+
+    const userMap = new Map(state.users.map((u) => [u.id, u]));
+    const msgMap = new Map(state.chatMessages.map((m) => [m.id, m]));
+
+    return {
+      message: enrichChatMessageRow(createdRow, userMap, msgMap),
+      recipient,
+    };
+  }
+
+  // PostgreSQL implementation
+  await ensureDatabaseSchema();
+  let recipient: UserRecord | null = null;
+  if (params.recipientId !== null) {
+    const rows = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.id, params.recipientId), isNull(users.deletedAt)));
+    recipient = rows[0] || null;
+    if (!recipient) {
+      throw new Error('Recipient user not found.');
+    }
+  }
+
+  const isRecipientOnline =
+    params.recipientId === null
+      ? true
+      : Boolean(
+          recipient && isUserOnlineNow(recipient.id, recipient.lastActivityAt)
+        );
+
+  const [inserted] = await db
+    .insert(chatMessages)
+    .values({
+      organizationId: params.sender.organizationId || 1,
+      senderId: params.sender.id,
+      recipientId: params.recipientId,
+      body: cleanBody,
+      replyToMessageId: params.replyToMessageId ?? null,
+      reactionsJson: '{}',
+      isPinned: shouldPin,
+      pinnedBy: shouldPin ? params.sender.id : null,
+      pinnedAt: shouldPin ? now : null,
+      deliveredAt: isRecipientOnline ? now : null,
+      readAt: null,
+    })
+    .returning();
+
+  if (recipient && recipient.id !== params.sender.id) {
+    await notifyUser({
+      recipientId: recipient.id,
+      actorId: params.sender.id,
+      eventType: 'CHAT_MESSAGE_RECEIVED',
+      title: `New Chat Message from ${params.sender.fullName}`,
+      body: cleanBody.length > 90 ? `${cleanBody.slice(0, 90)}...` : cleanBody,
+    });
+  }
+
+  let replyToMessage: ChatReplyPreview | null = null;
+  if (inserted.replyToMessageId) {
+    const parentRows = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.id, inserted.replyToMessageId));
+    if (parentRows[0]) {
+      const parentSenderRows = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, parentRows[0].senderId));
+      replyToMessage = {
+        id: parentRows[0].id,
+        senderId: parentRows[0].senderId,
+        senderName: parentSenderRows[0]?.fullName || 'Team Member',
+        body: parentRows[0].body,
+      };
+    }
+  }
+
+  return {
+    message: {
+      id: inserted.id,
+      organizationId: inserted.organizationId,
+      senderId: inserted.senderId,
+      senderName: params.sender.fullName,
+      senderRole: params.sender.role as 'admin' | 'employee',
+      senderDepartment: params.sender.department,
+      recipientId: inserted.recipientId,
+      recipientName: recipient ? recipient.fullName : null,
+      body: inserted.body,
+      replyToMessageId: inserted.replyToMessageId ?? null,
+      replyToMessage,
+      reactions: parseReactionsJson(inserted.reactionsJson),
+      isPinned: Boolean(inserted.isPinned),
+      pinnedBy: inserted.pinnedBy ?? null,
+      pinnedByName: shouldPin ? params.sender.fullName : null,
+      pinnedAt: inserted.pinnedAt
+        ? new Date(inserted.pinnedAt).toISOString()
+        : null,
+      deliveredAt: inserted.deliveredAt
+        ? new Date(inserted.deliveredAt).toISOString()
+        : null,
+      readAt: inserted.readAt ? new Date(inserted.readAt).toISOString() : null,
+      createdAt: new Date(inserted.createdAt).toISOString(),
+    },
+    recipient,
+  };
+}
+
+export async function toggleChatMessageReaction(params: {
+  user: UserRecord;
+  messageId: number;
+  emoji: string;
+}): Promise<ChatMessageRecord> {
+  await ensureSeedData();
+  const cleanEmoji = params.emoji.trim();
+  if (!cleanEmoji) {
+    throw new Error('Emoji is required.');
+  }
+  recordUserHeartbeat(params.user.id);
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    const msg = state.chatMessages.find((m) => m.id === params.messageId);
+    if (!msg) {
+      throw new Error('Chat message not found.');
+    }
+
+    const reactions = parseReactionsJson(msg.reactionsJson);
+    const currentList = reactions[cleanEmoji] || [];
+    const existingIdx = currentList.findIndex(
+      (r) => r.userId === params.user.id
+    );
+
+    if (existingIdx >= 0) {
+      currentList.splice(existingIdx, 1);
+      if (currentList.length === 0) {
+        delete reactions[cleanEmoji];
+      } else {
+        reactions[cleanEmoji] = currentList;
+      }
+    } else {
+      reactions[cleanEmoji] = [
+        ...currentList,
+        { userId: params.user.id, userName: params.user.fullName },
+      ];
+    }
+
+    msg.reactionsJson = JSON.stringify(reactions);
+    saveLocalDb();
+
+    const userMap = new Map(state.users.map((u) => [u.id, u]));
+    const msgMap = new Map(state.chatMessages.map((m) => [m.id, m]));
+    return enrichChatMessageRow(msg, userMap, msgMap);
+  }
+
+  await ensureDatabaseSchema();
+  const rows = await db
+    .select()
+    .from(chatMessages)
+    .where(eq(chatMessages.id, params.messageId));
+  const msg = rows[0];
+  if (!msg) {
+    throw new Error('Chat message not found.');
+  }
+
+  const reactions = parseReactionsJson(msg.reactionsJson);
+  const currentList = reactions[cleanEmoji] || [];
+  const existingIdx = currentList.findIndex((r) => r.userId === params.user.id);
+
+  if (existingIdx >= 0) {
+    currentList.splice(existingIdx, 1);
+    if (currentList.length === 0) {
+      delete reactions[cleanEmoji];
+    } else {
+      reactions[cleanEmoji] = currentList;
+    }
+  } else {
+    reactions[cleanEmoji] = [
+      ...currentList,
+      { userId: params.user.id, userName: params.user.fullName },
+    ];
+  }
+
+  const [updated] = await db
+    .update(chatMessages)
+    .set({ reactionsJson: JSON.stringify(reactions) })
+    .where(eq(chatMessages.id, msg.id))
+    .returning();
+
+  const allUsers = await db.select().from(users);
+  const allMsgs = await db.select().from(chatMessages);
+  const userMap = new Map(allUsers.map((u) => [u.id, u]));
+  const msgMap = new Map(allMsgs.map((m) => [m.id, m]));
+  return enrichChatMessageRow(updated, userMap, msgMap);
+}
+
+export async function togglePinChatMessage(params: {
+  actor: UserRecord;
+  messageId: number;
+  isPinned?: boolean;
+}): Promise<ChatMessageRecord> {
+  await ensureSeedData();
+  if (params.actor.role !== 'admin') {
+    throw new Error('FORBIDDEN_ONLY_ADMIN_CAN_PIN');
+  }
+  const now = new Date();
+  recordUserHeartbeat(params.actor.id);
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    const msg = state.chatMessages.find((m) => m.id === params.messageId);
+    if (!msg) {
+      throw new Error('Chat message not found.');
+    }
+
+    const nextPinned =
+      typeof params.isPinned === 'boolean' ? params.isPinned : !msg.isPinned;
+    msg.isPinned = nextPinned;
+    msg.pinnedBy = nextPinned ? params.actor.id : null;
+    msg.pinnedAt = nextPinned ? now : null;
+
+    saveLocalDb();
+
+    const userMap = new Map(state.users.map((u) => [u.id, u]));
+    const msgMap = new Map(state.chatMessages.map((m) => [m.id, m]));
+    return enrichChatMessageRow(msg, userMap, msgMap);
+  }
+
+  await ensureDatabaseSchema();
+  const rows = await db
+    .select()
+    .from(chatMessages)
+    .where(eq(chatMessages.id, params.messageId));
+  const msg = rows[0];
+  if (!msg) {
+    throw new Error('Chat message not found.');
+  }
+
+  const nextPinned =
+    typeof params.isPinned === 'boolean' ? params.isPinned : !msg.isPinned;
+
+  const [updated] = await db
+    .update(chatMessages)
+    .set({
+      isPinned: nextPinned,
+      pinnedBy: nextPinned ? params.actor.id : null,
+      pinnedAt: nextPinned ? now : null,
+    })
+    .where(eq(chatMessages.id, msg.id))
+    .returning();
+
+  const allUsers = await db.select().from(users);
+  const allMsgs = await db.select().from(chatMessages);
+  const userMap = new Map(allUsers.map((u) => [u.id, u]));
+  const msgMap = new Map(allMsgs.map((m) => [m.id, m]));
+  return enrichChatMessageRow(updated, userMap, msgMap);
+}
+
+export async function markChatMessagesReadByRecipient(params: {
+  reader: UserRecord;
+  contactId: number | null; // contact userId for DM, or null for General Room
+}): Promise<{
+  updatedMessageIds: number[];
+  updatedIds: number[];
+  senderIds: number[];
+  readAt: string;
+}> {
+  await ensureSeedData();
+  const now = new Date();
+  const readAtIso = now.toISOString();
+  recordUserHeartbeat(params.reader.id);
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    const updatedMessageIds: number[] = [];
+    const senderIdsSet = new Set<number>();
+
+    for (const msg of state.chatMessages) {
+      if (params.contactId !== null) {
+        // Direct message sent BY contactId TO reader
+        if (
+          msg.senderId === params.contactId &&
+          msg.recipientId === params.reader.id &&
+          !msg.readAt
+        ) {
+          msg.readAt = now;
+          if (!msg.deliveredAt) msg.deliveredAt = now;
+          updatedMessageIds.push(msg.id);
+          senderIdsSet.add(msg.senderId);
+        }
+      } else {
+        // General Room message sent by someone else
+        if (
+          msg.recipientId === null &&
+          msg.senderId !== params.reader.id &&
+          !msg.readAt
+        ) {
+          msg.readAt = now;
+          if (!msg.deliveredAt) msg.deliveredAt = now;
+          updatedMessageIds.push(msg.id);
+          senderIdsSet.add(msg.senderId);
+        }
+      }
+    }
+
+    // Also mark corresponding chat notifications as read
+    for (const n of state.notifications) {
+      if (
+        n.recipientId === params.reader.id &&
+        n.eventType === 'CHAT_MESSAGE_RECEIVED' &&
+        !n.readAt &&
+        (params.contactId === null || n.actorId === params.contactId)
+      ) {
+        n.readAt = now;
+      }
+    }
+
+    if (updatedMessageIds.length > 0) {
+      saveLocalDb();
+    }
+    return {
+      updatedMessageIds,
+      updatedIds: updatedMessageIds,
+      senderIds: Array.from(senderIdsSet),
+      readAt: readAtIso,
+    };
+  }
+
+  try {
+    await ensureDatabaseSchema();
+    const allMsgs = await db.select().from(chatMessages);
+    const toUpdate = allMsgs.filter((msg) => {
+      if (params.contactId !== null) {
+        return (
+          msg.senderId === params.contactId &&
+          msg.recipientId === params.reader.id &&
+          !msg.readAt
+        );
+      }
+      return (
+        msg.recipientId === null &&
+        msg.senderId !== params.reader.id &&
+        !msg.readAt
+      );
+    });
+    const updatedIds: number[] = [];
+    const senderSet = new Set<number>();
+    for (const m of toUpdate) {
+      await db
+        .update(chatMessages)
+        .set({
+          readAt: now,
+          deliveredAt: m.deliveredAt || now,
+        })
+        .where(eq(chatMessages.id, m.id));
+      updatedIds.push(m.id);
+      senderSet.add(m.senderId);
+    }
+    return {
+      updatedMessageIds: updatedIds,
+      updatedIds,
+      senderIds: Array.from(senderSet),
+      readAt: readAtIso,
+    };
+  } catch {
+    return {
+      updatedMessageIds: [],
+      updatedIds: [],
+      senderIds: [],
+      readAt: readAtIso,
+    };
+  }
+}
+
+export async function markChatMessagesDeliveredForUser(
+  recipientId: number
+): Promise<{
+  deliveredMessageIds: number[];
+  updatedIds: number[];
+  senderIds: number[];
+  deliveredAt: string;
+}> {
+  await ensureSeedData();
+  const now = new Date();
+  const deliveredAtIso = now.toISOString();
+  recordUserHeartbeat(recipientId);
+
+  if (!isPostgresConfigured()) {
+    const state = getLocalDb();
+    const deliveredMessageIds: number[] = [];
+    const senderIdsSet = new Set<number>();
+
+    for (const msg of state.chatMessages) {
+      if (msg.recipientId === recipientId && !msg.deliveredAt) {
+        msg.deliveredAt = now;
+        deliveredMessageIds.push(msg.id);
+        senderIdsSet.add(msg.senderId);
+      }
+    }
+    if (deliveredMessageIds.length > 0) {
+      saveLocalDb();
+    }
+    return {
+      deliveredMessageIds,
+      updatedIds: deliveredMessageIds,
+      senderIds: Array.from(senderIdsSet),
+      deliveredAt: deliveredAtIso,
+    };
+  }
+
+  try {
+    await ensureDatabaseSchema();
+    const undelivered = await db
+      .select()
+      .from(chatMessages)
+      .where(
+        and(
+          eq(chatMessages.recipientId, recipientId),
+          isNull(chatMessages.deliveredAt)
+        )
+      );
+    const ids: number[] = [];
+    const senders = new Set<number>();
+    for (const m of undelivered) {
+      await db
+        .update(chatMessages)
+        .set({ deliveredAt: now })
+        .where(eq(chatMessages.id, m.id));
+      ids.push(m.id);
+      senders.add(m.senderId);
+    }
+    return {
+      deliveredMessageIds: ids,
+      updatedIds: ids,
+      senderIds: Array.from(senders),
+      deliveredAt: deliveredAtIso,
+    };
+  } catch {
+    return {
+      deliveredMessageIds: [],
+      updatedIds: [],
+      senderIds: [],
+      deliveredAt: deliveredAtIso,
+    };
+  }
+}
+
+function buildWorkspaceChatPayload(
+  currentUser: UserRecord,
+  allUsers: UserRecord[],
+  allChatMessages: ChatMessageRow[]
+): {
+  chatContacts: ChatContact[];
+  chatMessages: ChatMessageRecord[];
+  onlineUserIds: number[];
+} {
+  const userMap = new Map(allUsers.map((u) => [u.id, u]));
+
+  // Deduplicate redundant default "System Administrator" accounts so the contact list shows a single clean Admin entry
+  // while keeping all real distinct users and the current user
+  const contactUsers: UserRecord[] = [];
+  let primaryAdminIncluded = false;
+
+  const sortedUsers = [...allUsers]
+    .filter((u) => !u.deletedAt && u.accountStatus !== 'deactivated')
+    .sort((a, b) => a.id - b.id);
+
+  for (const u of sortedUsers) {
+    if (u.id === currentUser.id) continue;
+    if (
+      u.role === 'admin' &&
+      u.fullName === 'System Administrator' &&
+      u.employeeNumber === 'ADMIN-001'
+    ) {
+      if (currentUser.role === 'admin') {
+        // Current user is already a System Administrator; don't show duplicate default System Admin aliases unless they have chat history
+        const hasMessages = allChatMessages.some(
+          (m) => m.senderId === u.id || m.recipientId === u.id
+        );
+        if (!hasMessages) continue;
+      } else {
+        if (primaryAdminIncluded) {
+          const hasMessages = allChatMessages.some(
+            (m) => m.senderId === u.id || m.recipientId === u.id
+          );
+          if (!hasMessages) continue;
+        }
+        primaryAdminIncluded = true;
+      }
+    }
+    contactUsers.push(u);
+  }
+
+  // Filter messages visible to currentUser:
+  // 1) General Team Room messages (recipientId === null)
+  // 2) Direct messages where senderId === currentUser.id or recipientId === currentUser.id
+  // 3) Or if currentUser is a default System Administrator, also include DMs sent to primary System Administrator ID 1
+  const isDefaultSysAdmin =
+    currentUser.role === 'admin' &&
+    currentUser.fullName === 'System Administrator';
+  const sysAdminIds = new Set(
+    allUsers
+      .filter(
+        (u) => u.role === 'admin' && u.fullName === 'System Administrator'
+      )
+      .map((u) => u.id)
+  );
+
+  const visibleMessages = allChatMessages
+    .filter((m) => {
+      if (m.recipientId === null) return true;
+      if (m.senderId === currentUser.id || m.recipientId === currentUser.id) {
+        return true;
+      }
+      if (
+        isDefaultSysAdmin &&
+        (sysAdminIds.has(m.senderId) ||
+          (m.recipientId !== null && sysAdminIds.has(m.recipientId)))
+      ) {
+        return true;
+      }
+      return false;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+  const messageMap = new Map(allChatMessages.map((m) => [m.id, m]));
+  const enrichedMessages: ChatMessageRecord[] = visibleMessages.map((m) =>
+    enrichChatMessageRow(m, userMap, messageMap)
+  );
+
+  const contacts: ChatContact[] = contactUsers.map((u) => {
+    const isTargetDefaultAdmin = sysAdminIds.has(u.id);
+    const dmList = enrichedMessages.filter((m) => {
+      if (m.recipientId === null) return false;
+      const fromContact =
+        m.senderId === u.id ||
+        (isTargetDefaultAdmin && sysAdminIds.has(m.senderId));
+      const toContact =
+        m.recipientId === u.id ||
+        (isTargetDefaultAdmin &&
+          m.recipientId !== null &&
+          sysAdminIds.has(m.recipientId));
+      const fromMe =
+        m.senderId === currentUser.id ||
+        (isDefaultSysAdmin && sysAdminIds.has(m.senderId));
+      const toMe =
+        m.recipientId === currentUser.id ||
+        (isDefaultSysAdmin &&
+          m.recipientId !== null &&
+          sysAdminIds.has(m.recipientId));
+      return (fromContact && toMe) || (fromMe && toContact);
+    });
+
+    const lastMsg = dmList.length > 0 ? dmList[dmList.length - 1] : null;
+    const unreadCount = dmList.filter(
+      (m) =>
+        m.senderId !== currentUser.id &&
+        !(isDefaultSysAdmin && sysAdminIds.has(m.senderId)) &&
+        !m.readAt
+    ).length;
+
+    const online = isUserOnlineNow(u.id, u.lastActivityAt);
+    const lastSeenIso = new Date(u.lastActivityAt || u.updatedAt).toISOString();
+
+    return {
+      id: u.id,
+      uid: u.uid,
+      fullName: u.fullName,
+      email: u.email,
+      role: u.role as 'admin' | 'employee',
+      department: u.department,
+      jobTitle: u.jobTitle,
+      employeeNumber: u.employeeNumber,
+      accountStatus: u.accountStatus as 'active' | 'deactivated' | 'invited',
+      isOnline: online,
+      lastSeenAt: lastSeenIso,
+      lastActivityAt: lastSeenIso,
+      unreadCount,
+      lastMessage: lastMsg
+        ? {
+            id: lastMsg.id,
+            senderId: lastMsg.senderId,
+            recipientId: lastMsg.recipientId,
+            body: lastMsg.body,
+            createdAt: lastMsg.createdAt,
+            deliveredAt: lastMsg.deliveredAt,
+            readAt: lastMsg.readAt,
+          }
+        : null,
+    };
+  });
+
+  // Sort contacts: unread messages first, then most recent message, then online status, then name
+  contacts.sort((a, b) => {
+    if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
+    const aTime = a.lastMessage
+      ? new Date(a.lastMessage.createdAt).getTime()
+      : 0;
+    const bTime = b.lastMessage
+      ? new Date(b.lastMessage.createdAt).getTime()
+      : 0;
+    if (bTime !== aTime) return bTime - aTime;
+    if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+    if (a.role !== b.role) return a.role === 'admin' ? -1 : 1;
+    return a.fullName.localeCompare(b.fullName);
+  });
+
+  const onlineUserIds = getOnlineUserIdsList(allUsers);
+  if (!onlineUserIds.includes(currentUser.id)) {
+    onlineUserIds.push(currentUser.id);
+  }
+
+  return {
+    chatContacts: contacts,
+    chatMessages: enrichedMessages,
+    onlineUserIds,
+  };
+}
+
 export async function getAllWorkspaceData(currentUser: UserRecord) {
   try {
     await ensureSeedData();
+    recordUserHeartbeat(currentUser.id);
 
     let organization: typeof organizations.$inferSelect;
     let allUsers: UserRecord[];
@@ -913,9 +1878,18 @@ export async function getAllWorkspaceData(currentUser: UserRecord) {
     let userNotifications: (typeof notifications.$inferSelect)[];
     let allLogs: (typeof activityLogs.$inferSelect)[];
     let allAttachments: (typeof taskAttachments.$inferSelect)[];
+    let allChatMessages: ChatMessageRow[] = [];
 
     if (!isPostgresConfigured()) {
       const state = getLocalDb();
+      // Auto-mark any pending direct messages to currentUser as delivered now that they fetched workspace
+      const now = new Date();
+      for (const msg of state.chatMessages) {
+        if (msg.recipientId === currentUser.id && !msg.deliveredAt) {
+          msg.deliveredAt = now;
+        }
+      }
+      allChatMessages = [...state.chatMessages];
       organization = state.organizations[0];
       allUsers = [...state.users]
         .filter((u) => !u.deletedAt)
@@ -1014,6 +1988,15 @@ export async function getAllWorkspaceData(currentUser: UserRecord) {
         .select()
         .from(taskAttachments)
         .orderBy(desc(taskAttachments.createdAt));
+
+      try {
+        allChatMessages = await db
+          .select()
+          .from(chatMessages)
+          .orderBy(desc(chatMessages.createdAt));
+      } catch {
+        allChatMessages = [];
+      }
     }
 
     const userMap = new Map(allUsers.map((u) => [u.id, u]));
@@ -1093,10 +2076,24 @@ export async function getAllWorkspaceData(currentUser: UserRecord) {
     const overallCompletionRate =
       totalAssigned > 0 ? Math.round((approvedCount / totalAssigned) * 100) : 0;
 
-    // Employee Directory & Leaderboard Computation (using all non-deleted employees)
-    const employeesOnly = allUsers.filter(
-      (u) => u.role === 'employee' || u.role === 'admin'
-    );
+    // Employee Directory & Leaderboard Computation (using all non-deleted employees, deduplicating redundant default System Administrator aliases)
+    let seenDefaultSysAdmin = false;
+    const employeesOnly = allUsers.filter((u) => {
+      if (u.role !== 'employee' && u.role !== 'admin') return false;
+      if (
+        u.role === 'admin' &&
+        u.fullName === 'System Administrator' &&
+        u.employeeNumber === 'ADMIN-001'
+      ) {
+        if (u.id === currentUser.id) {
+          seenDefaultSysAdmin = true;
+          return true;
+        }
+        if (seenDefaultSysAdmin) return false;
+        seenDefaultSysAdmin = true;
+      }
+      return true;
+    });
     const priorityWeights: Record<string, number> = {
       Low: 1.0,
       Medium: 1.2,
@@ -1271,6 +2268,7 @@ export async function getAllWorkspaceData(currentUser: UserRecord) {
           : 'System',
         parsedMetadata: l.metadata ? JSON.parse(l.metadata) : {},
       })),
+      ...buildWorkspaceChatPayload(currentUser, allUsers, allChatMessages),
     };
   } catch (error) {
     console.error('Database error in getAllWorkspaceData:', error);

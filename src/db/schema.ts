@@ -233,6 +233,34 @@ export const taskAttachments = pgTable('task_attachments', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const chatMessages = pgTable(
+  'chat_messages',
+  {
+    id: serial('id').primaryKey(),
+    organizationId: integer('organization_id').notNull().default(1),
+    senderId: integer('sender_id')
+      .references(() => users.id)
+      .notNull(),
+    recipientId: integer('recipient_id').references(() => users.id), // null = General Team Room
+    body: text('body').notNull(),
+    replyToMessageId: integer('reply_to_message_id'),
+    reactionsJson: text('reactions_json').default('{}'),
+    isPinned: boolean('is_pinned').notNull().default(false),
+    pinnedBy: integer('pinned_by').references(() => users.id),
+    pinnedAt: timestamp('pinned_at'),
+    deliveredAt: timestamp('delivered_at'),
+    readAt: timestamp('read_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_chat_messages_sender_recipient_created').on(
+      table.senderId,
+      table.recipientId,
+      table.createdAt
+    ),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   assignments: many(taskAssignments),

@@ -21,6 +21,7 @@ interface EmployeeOfTheMonthSpotlightProps {
   organization?: OrganizationData;
   currentUserId?: number;
   isAdmin?: boolean;
+  fullPageView?: boolean;
   onSelectEmployee?: (emp: EmployeeStat) => void;
 }
 
@@ -29,6 +30,7 @@ export function EmployeeOfTheMonthSpotlight({
   organization,
   currentUserId,
   isAdmin = false,
+  fullPageView = false,
   onSelectEmployee,
 }: EmployeeOfTheMonthSpotlightProps) {
   const ar = isArabicActive();
@@ -447,13 +449,38 @@ export function EmployeeOfTheMonthSpotlight({
   };
 
   return (
-    <>
+    <div className="space-y-6">
+      {fullPageView && (
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 font-display">
+              {ar
+                ? 'شهادة تقدير الموظف المثالي (موظف الشهر)'
+                : 'Employee of the Month Certificate of Appreciation'}
+            </h1>
+            <p className="text-xs text-slate-500 mt-1">
+              {ar
+                ? 'تكريم رسمي للموظف الأعلى أداءً والتزاماً بالمواعيد النهائية وجودة المهام المعتمدة، مع إمكانية طباعة وتحميل الشهادة بصيغة PDF.'
+                : 'Official recognition of top performance, on-time delivery, and approved task quality with printable A4 landscape PDF export.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handlePrintCertificate}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg shadow-xs cursor-pointer"
+          >
+            <Printer className="w-4 h-4" />
+            <span>
+              {ar
+                ? 'طباعة / تحميل الشهادة (PDF) 🖨️'
+                : 'Print / Download Certificate (PDF) 🖨️'}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Spotlight Banner at Top of Dashboard */}
       <div className="relative overflow-hidden rounded-xl border border-amber-300/80 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-sm">
-        {/* Subtle Decorative Glow */}
-        <div className="pointer-events-none absolute -top-20 -right-20 h-56 w-56 rounded-full bg-amber-400/15 blur-2xl" />
-        <div className="pointer-events-none absolute -bottom-20 -left-20 h-56 w-56 rounded-full bg-indigo-500/20 blur-2xl" />
-
         <div className="relative p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           {/* Left: Trophy + Winner Profile */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
@@ -515,7 +542,7 @@ export function EmployeeOfTheMonthSpotlight({
 
           {/* Right: Key Performance Pills + Certificate Button */}
           <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-            <div className="grid grid-cols-3 gap-2.5 bg-white/5 border border-white/10 rounded-lg p-2.5 backdrop-blur-sm">
+            <div className="grid grid-cols-3 gap-2.5 bg-slate-800/90 border border-white/10 rounded-lg p-2.5">
               <div className="px-2.5 text-center border-e border-white/10">
                 <p className="text-[11px] text-indigo-200">
                   {ar ? 'النقاط الموزونة' : 'Weighted Score'}
@@ -588,11 +615,23 @@ export function EmployeeOfTheMonthSpotlight({
         </div>
       </div>
 
-      {/* Printable Certificate Modal */}
-      {showCertificateModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white border border-slate-200 rounded-xl max-w-4xl w-full overflow-hidden shadow-2xl my-8">
-            {/* Modal Control Bar */}
+      {/* Printable Certificate View (Inline on Full Page OR Modal) */}
+      {(fullPageView || showCertificateModal) && (
+        <div
+          className={
+            fullPageView
+              ? 'w-full'
+              : 'fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto'
+          }
+        >
+          <div
+            className={
+              fullPageView
+                ? 'bg-white border border-slate-200 rounded-xl w-full overflow-hidden shadow-md'
+                : 'bg-white border border-slate-200 rounded-xl max-w-4xl w-full overflow-hidden shadow-2xl my-8'
+            }
+          >
+            {/* Control Bar */}
             <div className="px-6 py-4 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <Award className="w-5 h-5 text-amber-400" />
@@ -647,14 +686,16 @@ export function EmployeeOfTheMonthSpotlight({
                   </span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setShowCertificateModal(false)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-md cursor-pointer"
-                  aria-label="Close"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                {!fullPageView && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCertificateModal(false)}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-md cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -827,6 +868,6 @@ export function EmployeeOfTheMonthSpotlight({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

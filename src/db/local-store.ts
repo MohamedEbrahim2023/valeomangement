@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   activityLogs,
+  chatMessages,
   notifications,
   organizations,
   taskAssignments,
@@ -23,6 +24,7 @@ export type TaskReviewRow = typeof taskReviews.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type ActivityLogRow = typeof activityLogs.$inferSelect;
 export type TaskAttachmentRow = typeof taskAttachments.$inferSelect;
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
 
 export interface LocalDatabaseState {
   counters: {
@@ -36,6 +38,7 @@ export interface LocalDatabaseState {
     notifications: number;
     activityLogs: number;
     taskAttachments: number;
+    chatMessages: number;
   };
   organizations: OrganizationRow[];
   users: UserRow[];
@@ -47,6 +50,7 @@ export interface LocalDatabaseState {
   notifications: NotificationRow[];
   activityLogs: ActivityLogRow[];
   taskAttachments: TaskAttachmentRow[];
+  chatMessages: ChatMessageRow[];
 }
 
 const DATA_FILE_PATH = path.resolve(process.cwd(), '.data', 'velopulse-db.json');
@@ -87,6 +91,7 @@ function createEmptyState(): LocalDatabaseState {
       notifications: 0,
       activityLogs: 0,
       taskAttachments: 0,
+      chatMessages: 0,
     },
     organizations: [],
     users: [],
@@ -98,6 +103,7 @@ function createEmptyState(): LocalDatabaseState {
     notifications: [],
     activityLogs: [],
     taskAttachments: [],
+    chatMessages: [],
   };
 }
 
@@ -113,7 +119,10 @@ function loadStateFromDisk(): LocalDatabaseState {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const raw = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(raw) as LocalDatabaseState;
-      return reviveDates(parsed);
+      const revived = reviveDates(parsed);
+      if (!revived.chatMessages) revived.chatMessages = [];
+      if (!revived.counters.chatMessages) revived.counters.chatMessages = 0;
+      return revived;
     }
   } catch {
     // Fallback to in-memory state if disk read fails
@@ -124,6 +133,12 @@ function loadStateFromDisk(): LocalDatabaseState {
 export function getLocalDb(): LocalDatabaseState {
   if (!global._veloPulseLocalDb) {
     global._veloPulseLocalDb = loadStateFromDisk();
+  }
+  if (!global._veloPulseLocalDb.chatMessages) {
+    global._veloPulseLocalDb.chatMessages = [];
+  }
+  if (typeof global._veloPulseLocalDb.counters.chatMessages !== 'number') {
+    global._veloPulseLocalDb.counters.chatMessages = 0;
   }
   return global._veloPulseLocalDb;
 }

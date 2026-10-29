@@ -35,6 +35,8 @@ import {
 import { UserGuideView } from './components/UserGuideView.tsx';
 import { DeadlinesCalendarView } from './components/DeadlinesCalendarView.tsx';
 import { SiteDataAssistant } from './components/SiteDataAssistant.tsx';
+import { TeamChatView } from './components/TeamChatView.tsx';
+import { EmployeeOfTheMonthSpotlight } from './components/EmployeeOfTheMonthSpotlight.tsx';
 import {
   AlertToneType,
   getDesktopNotificationPermission,
@@ -45,6 +47,7 @@ import {
 } from './lib/alerts.ts';
 import {
   AlertCircle,
+  Award,
   BarChart3,
   Bell,
   BellRing,
@@ -56,6 +59,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquare,
   RefreshCw,
   Shield,
   Sliders,
@@ -71,8 +75,10 @@ type ActiveSection =
   | 'overview'
   | 'employees'
   | 'tasks'
+  | 'chat'
   | 'calendar'
   | 'leaderboard'
+  | 'certificate'
   | 'reports'
   | 'notifications'
   | 'audit'
@@ -153,6 +159,12 @@ export default function App() {
   const [showPublicGuide, setShowPublicGuide] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [chatTargetContactId, setChatTargetContactId] = useState<
+    number | null | undefined
+  >(undefined);
+  const [typingUserMap, setTypingUserMap] = useState<
+    Record<string, { senderName: string; expiresAt: number }>
+  >({});
 
   // Sound & Browser Desktop Notification States
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -172,6 +184,7 @@ export default function App() {
     body: string;
     eventType: string;
     relatedAssignmentId?: number | null;
+    relatedChatSenderId?: number | null;
   } | null>(null);
 
   const soundEnabledRef = useRef<boolean>(soundEnabled);
@@ -334,7 +347,8 @@ export default function App() {
 
         const data = await res.json();
         if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
+          // Never wipe an active workspace during silent background syncs to prevent mobile screen flashing
+          if (!silent && (res.status === 401 || res.status === 403)) {
             setAuthToken(null);
             setWorkspace(null);
           }
@@ -356,7 +370,7 @@ export default function App() {
 
   // Restore session and refresh workspace automatically on initial page load
   useEffect(() => {
-    fetchWorkspace(authToken, Boolean(workspace));
+    fetchWorkspace(authToken, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -463,6 +477,7 @@ export default function App() {
 
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     let isUnmounted = false;
 
     const connectStream = () => {
@@ -478,9 +493,184 @@ export default function App() {
       es.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type && payload.type !== 'CONNECTED') {
-            fetchWorkspace(authToken, true);
+          if (!payload.type || payload.type === 'CONNECTED') return;
+
+          if (payload.type === 'PRESENCE_UPDATED') {
+            const targetUserId = Number(payload.userId);
+            const isOnline = Boolean(payload.isOnline);
+            const lastActivityAt =
+              payload.lastActivityAt || new Date().toISOString();
+            setWorkspaceState((prev) => {
+              if (!prev) return prev;
+              const prevOnline = new Set(prev.onlineUserIds || []);
+              if (isOnline) prevOnline.add(targetUserId);
+              else prevOnline.delete(targetUserId);
+              const nextContacts = (prev.chatContacts || []).map((c) =>
+                c.id === targetUserId
+                  ? { ...c, isOnline, lastActivityAt }
+                  : c
+              );
+              return {
+                ...prev,
+                onlineUserIds: Array.from(prevOnline),
+                chatContacts: nextContacts,
+              };
+            });
+            return;
           }
+
+          if (payload.type === 'CHAT_USER_TYPING') {
+            const senderId = Number(payload.senderId);
+            const senderName = String(payload.senderName || 'Member');
+            const recipientId = payload.recipientId ?? null;
+            setWorkspaceState((prev) => {
+              if (!prev || prev.currentUser.id === senderId) return prev;
+              if (
+                recipientId !== null &&
+                Number(recipientId) !== prev.currentUser.id
+              ) {
+                return prev;
+              }
+              const key =
+                recipientId === null ? 'room:general' : `dm:${senderId}`;
+              setTypingUserMap((old) => ({
+                ...old,
+                [key]: { senderName, expiresAt: Date.now() + 4000 },
+              }));
+              return prev;
+            });
+            return;
+          }
+
+          if (payload.type === 'CHAT_MESSAGES_DELIVERED') {
+            const updatedIds = new Set<number>(
+              Array.isArray(payload.updatedIds)
+                ? payload.updatedIds.map(Number)
+                : []
+            );
+            const deliveredAt =
+              payload.deliveredAt || new Date().toISOString();
+            if (updatedIds.size > 0) {
+              setWorkspaceState((prev) => {
+                if (!prev) return prev;
+                const nextMsgs = (prev.chatMessages || []).map((m) =>
+                  updatedIds.has(m.id) && !m.deliveredAt
+                    ? { ...m, deliveredAt }
+                    : m
+                );
+                return { ...prev, chatMessages: nextMsgs };
+              });
+            }
+            return;
+          }
+
+          if (payload.type === 'CHAT_MESSAGES_READ') {
+            const updatedIds = new Set<number>(
+              Array.isArray(payload.updatedIds)
+                ? payload.updatedIds.map(Number)
+                : []
+            );
+            const readAt = payload.readAt || new Date().toISOString();
+            if (updatedIds.size > 0) {
+              setWorkspaceState((prev) => {
+                if (!prev) return prev;
+                const nextMsgs = (prev.chatMessages || []).map((m) =>
+                  updatedIds.has(m.id)
+                    ? { ...m, deliveredAt: m.deliveredAt || readAt, readAt }
+                    : m
+                );
+                return { ...prev, chatMessages: nextMsgs };
+              });
+            }
+            return;
+          }
+
+          if (payload.type === 'CHAT_MESSAGE_CREATED' && payload.message) {
+            const incomingMsg = payload.message;
+            setWorkspaceState((prev) => {
+              if (!prev) return prev;
+              const isRelevant =
+                incomingMsg.recipientId === null ||
+                incomingMsg.senderId === prev.currentUser.id ||
+                incomingMsg.recipientId === prev.currentUser.id;
+              if (!isRelevant) return prev;
+
+              const existing = prev.chatMessages || [];
+              if (existing.some((m) => m.id === incomingMsg.id)) {
+                return prev;
+              }
+
+              // If the message is addressed to currentUser from someone else, acknowledge delivery + notify
+              if (incomingMsg.senderId !== prev.currentUser.id) {
+                if (incomingMsg.recipientId === prev.currentUser.id) {
+                  fetch('/api/chat/messages/delivered', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${authToken}` },
+                  }).catch(() => {});
+                }
+
+                if (soundEnabledRef.current) {
+                  playNotificationChime('TASK_ASSIGNED');
+                }
+
+                const alertTitle =
+                  incomingMsg.recipientId === null
+                    ? `💬 ${incomingMsg.senderName} (${lang === 'ar' ? 'غرفة الفريق' : 'Team Chat'})`
+                    : `💬 ${lang === 'ar' ? 'رسالة جديدة من' : 'New message from'} ${incomingMsg.senderName}`;
+
+                sendDesktopNotification({
+                  title: alertTitle,
+                  body: incomingMsg.body,
+                  tag: `velopulse-chat-${incomingMsg.id}`,
+                  onClick: () => {
+                    setChatTargetContactId(
+                      incomingMsg.recipientId === null
+                        ? null
+                        : incomingMsg.senderId
+                    );
+                    setActiveSection('chat');
+                  },
+                });
+
+                setLiveAlertBanner({
+                  id: Date.now(),
+                  title: alertTitle,
+                  body: incomingMsg.body,
+                  eventType: 'CHAT_MESSAGE_RECEIVED',
+                  relatedChatSenderId:
+                    incomingMsg.recipientId === null
+                      ? 0
+                      : incomingMsg.senderId,
+                });
+              }
+
+              return {
+                ...prev,
+                chatMessages: [...existing, incomingMsg],
+              };
+            });
+            return;
+          }
+
+          if (payload.type === 'CHAT_MESSAGE_UPDATED' && payload.message) {
+            const updatedMsg = payload.message;
+            setWorkspaceState((prev) => {
+              if (!prev) return prev;
+              const existing = prev.chatMessages || [];
+              if (!existing.some((m) => m.id === updatedMsg.id)) {
+                return prev;
+              }
+              return {
+                ...prev,
+                chatMessages: existing.map((m) =>
+                  m.id === updatedMsg.id ? updatedMsg : m
+                ),
+              };
+            });
+            return;
+          }
+
+          fetchWorkspace(authToken, true);
         } catch {
           // Ignore malformed event
         }
@@ -493,14 +683,27 @@ export default function App() {
         if (!reconnectTimer) {
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
-            fetchWorkspace(authToken, true);
             connectStream();
-          }, 3000);
+          }, 10_000);
         }
       };
     };
 
     connectStream();
+
+    // Periodic heartbeat to keep online green dot & last seen fresh
+    heartbeatTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetch('/api/chat/heartbeat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({}),
+        }).catch(() => {});
+      }
+    }, 25_000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -514,12 +717,13 @@ export default function App() {
     return () => {
       isUnmounted = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       es?.close();
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       setRealtimeConnected(false);
     };
-  }, [authToken, fetchWorkspace]);
+  }, [authToken, fetchWorkspace, lang]);
 
   const apiRequest = async (
     path: string,
@@ -621,9 +825,13 @@ export default function App() {
         externalError={error}
         onOpenGuide={() => setShowPublicGuide(true)}
         onToggleLang={() => setLang((l) => (l === 'en' ? 'ar' : 'en'))}
-        onLoginSuccess={async (token) => {
+        onLoginSuccess={async (token, initialWorkspace) => {
           setAuthToken(token);
-          await fetchWorkspace(token);
+          if (initialWorkspace) {
+            setWorkspace(initialWorkspace);
+          } else {
+            await fetchWorkspace(token);
+          }
         }}
       />
     );
@@ -637,6 +845,12 @@ export default function App() {
   const pendingReviewCount = workspace.assignments.filter(
     (a) => a.status === 'awaiting_review'
   ).length;
+  const unreadChatCount = (workspace.chatMessages || []).filter(
+    (m) =>
+      m.senderId !== currentUser.id &&
+      (m.recipientId === currentUser.id || m.recipientId === null) &&
+      !m.readAt
+  ).length;
 
   const navItems: {
     id: ActiveSection;
@@ -649,6 +863,12 @@ export default function App() {
       id: 'overview',
       label: isAdmin ? t.navDashboard : t.navMyTasks,
       icon: <LayoutDashboard className="w-4 h-4" />,
+    },
+    {
+      id: 'chat',
+      label: lang === 'ar' ? 'المحادثات الفورية (الشات)' : 'Team & Admin Chat',
+      icon: <MessageSquare className="w-4 h-4" />,
+      badge: unreadChatCount > 0 ? unreadChatCount : undefined,
     },
     ...(isAdmin
       ? [
@@ -675,6 +895,14 @@ export default function App() {
       id: 'leaderboard',
       label: t.navLeaderboard,
       icon: <Trophy className="w-4 h-4" />,
+    },
+    {
+      id: 'certificate',
+      label:
+        lang === 'ar'
+          ? 'شهادة الموظف المثالي'
+          : 'Employee of the Month',
+      icon: <Award className="w-4 h-4" />,
     },
     ...(isAdmin
       ? [
@@ -713,7 +941,7 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row overflow-x-hidden">
+    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
       {/* Mobile Slide-Over Backdrop Overlay */}
       {mobileMenuOpen && (
         <div
@@ -804,7 +1032,7 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Header following SaaS Top Bar Contract */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
+        <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
@@ -947,6 +1175,23 @@ export default function App() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {liveAlertBanner.relatedChatSenderId !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChatTargetContactId(
+                        liveAlertBanner.relatedChatSenderId === 0
+                          ? null
+                          : liveAlertBanner.relatedChatSenderId
+                      );
+                      setActiveSection('chat');
+                      setLiveAlertBanner(null);
+                    }}
+                    className="px-3 py-1.5 bg-white text-indigo-950 font-bold rounded-md hover:bg-indigo-100 cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'فتح المحادثة الآن' : 'Open Chat Now'}
+                  </button>
+                )}
                 {liveAlertBanner.relatedAssignmentId && (
                   <button
                     type="button"
@@ -1031,9 +1276,64 @@ export default function App() {
         )}
 
         {/* Active Section Viewport */}
-        <main className="flex-1 p-3.5 sm:p-6 pb-28 md:pb-8 max-w-[1400px] w-full mx-auto overflow-x-hidden">
+        <main className="flex-1 p-3.5 sm:p-6 pb-28 md:pb-8 max-w-[1400px] w-full mx-auto">
           {activeSection === 'guide' && (
             <UserGuideView onClose={() => setActiveSection('overview')} />
+          )}
+
+          {activeSection === 'chat' && (
+            <TeamChatView
+              lang={lang}
+              currentUser={currentUser}
+              contacts={workspace.chatContacts || []}
+              messages={workspace.chatMessages || []}
+              onlineUserIds={workspace.onlineUserIds || []}
+              typingUserMap={typingUserMap}
+              initialSelectedContactId={chatTargetContactId}
+              onSendMessage={async (
+                recipientId,
+                body,
+                replyToMessageId,
+                pinAnnouncement
+              ) => {
+                await apiRequest('/api/chat/messages', 'POST', {
+                  recipientId,
+                  body,
+                  replyToMessageId,
+                  pinAnnouncement,
+                });
+              }}
+              onToggleReaction={async (messageId, emoji) => {
+                await apiRequest(
+                  `/api/chat/messages/${messageId}/react`,
+                  'POST',
+                  { emoji }
+                );
+              }}
+              onTogglePinMessage={async (messageId, isPinned) => {
+                await apiRequest(
+                  `/api/chat/messages/${messageId}/pin`,
+                  'POST',
+                  { isPinned }
+                );
+              }}
+              onMarkConversationRead={async (contactId) => {
+                await apiRequest('/api/chat/messages/read', 'POST', {
+                  contactId,
+                });
+              }}
+              onNotifyTyping={(recipientId) => {
+                if (!authToken) return;
+                fetch('/api/chat/heartbeat', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${authToken}`,
+                  },
+                  body: JSON.stringify({ typingToUserId: recipientId }),
+                }).catch(() => {});
+              }}
+            />
           )}
 
           {activeSection === 'overview' &&
@@ -1107,6 +1407,21 @@ export default function App() {
             <LeaderboardView
               leaderboard={workspace.leaderboard}
               organization={organization}
+            />
+          )}
+
+          {activeSection === 'certificate' && (
+            <EmployeeOfTheMonthSpotlight
+              employees={workspace.employees}
+              organization={organization}
+              currentUserId={currentUser.id}
+              isAdmin={isAdmin}
+              fullPageView={true}
+              onSelectEmployee={(emp) => {
+                if (isAdmin) {
+                  setSelectedProfileEmployee(emp);
+                }
+              }}
             />
           )}
 
@@ -1339,19 +1654,19 @@ export default function App() {
       {/* Mobile Fixed Bottom Navigation Bar (< md) */}
       <nav
         aria-label="Mobile bottom navigation"
-        className="fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-1 py-1.5 flex items-center justify-around md:hidden shadow-lg"
+        className="fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 px-1 py-1.5 flex items-center justify-around md:hidden shadow-lg"
       >
         <button
           type="button"
           onClick={() => setActiveSection('overview')}
-          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[52px] ${
             activeSection === 'overview'
               ? 'text-indigo-700 font-bold'
               : 'text-slate-600'
           }`}
         >
           <LayoutDashboard className="w-4 h-4" />
-          <span className="truncate max-w-[64px]">
+          <span className="truncate max-w-[60px]">
             {lang === 'ar'
               ? isAdmin
                 ? 'الرئيسية'
@@ -1362,18 +1677,38 @@ export default function App() {
           </span>
         </button>
 
+        <button
+          type="button"
+          onClick={() => setActiveSection('chat')}
+          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[52px] ${
+            activeSection === 'chat'
+              ? 'text-indigo-700 font-bold'
+              : 'text-slate-600'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4" />
+          <span className="truncate max-w-[60px]">
+            {lang === 'ar' ? 'المحادثات' : 'Chat'}
+          </span>
+          {unreadChatCount > 0 && (
+            <span className="absolute top-0.5 end-2 w-4 h-4 rounded-full bg-emerald-600 text-white text-[9px] font-bold flex items-center justify-center">
+              {unreadChatCount}
+            </span>
+          )}
+        </button>
+
         {isAdmin && (
           <button
             type="button"
             onClick={() => setActiveSection('tasks')}
-            className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+            className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[52px] ${
               activeSection === 'tasks'
                 ? 'text-indigo-700 font-bold'
                 : 'text-slate-600'
             }`}
           >
             <ClipboardList className="w-4 h-4" />
-            <span className="truncate max-w-[64px]">
+            <span className="truncate max-w-[60px]">
               {lang === 'ar' ? 'المهام' : 'Tasks'}
             </span>
             {pendingReviewCount > 0 && (
@@ -1386,30 +1721,15 @@ export default function App() {
 
         <button
           type="button"
-          onClick={() => setActiveSection('calendar')}
-          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
-            activeSection === 'calendar'
-              ? 'text-indigo-700 font-bold'
-              : 'text-slate-600'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          <span className="truncate max-w-[64px]">
-            {lang === 'ar' ? 'التقويم' : 'Calendar'}
-          </span>
-        </button>
-
-        <button
-          type="button"
           onClick={() => setActiveSection('leaderboard')}
-          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[52px] ${
             activeSection === 'leaderboard'
               ? 'text-indigo-700 font-bold'
               : 'text-slate-600'
           }`}
         >
           <Trophy className="w-4 h-4" />
-          <span className="truncate max-w-[64px]">
+          <span className="truncate max-w-[60px]">
             {lang === 'ar' ? 'لوحة الشرف' : 'Ranks'}
           </span>
         </button>
@@ -1417,14 +1737,14 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('notifications')}
-          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[56px] ${
+          className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium min-w-[52px] ${
             activeSection === 'notifications'
               ? 'text-indigo-700 font-bold'
               : 'text-slate-600'
           }`}
         >
           <Bell className="w-4 h-4" />
-          <span className="truncate max-w-[64px]">
+          <span className="truncate max-w-[60px]">
             {lang === 'ar' ? 'الإشعارات' : 'Alerts'}
           </span>
           {unreadNotifCount > 0 && (
@@ -1437,10 +1757,10 @@ export default function App() {
         <button
           type="button"
           onClick={() => setMobileMenuOpen(true)}
-          className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium text-slate-600 min-w-[52px]"
+          className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-medium text-slate-600 min-w-[50px]"
         >
           <Menu className="w-4 h-4" />
-          <span className="truncate max-w-[60px]">
+          <span className="truncate max-w-[58px]">
             {lang === 'ar' ? 'المزيد' : 'More'}
           </span>
         </button>

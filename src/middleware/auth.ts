@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifySessionToken } from '../lib/security.ts';
-import { getUserByUid, UserRecord } from '../db/repository.ts';
+import {
+  getUserByEmail,
+  getUserByUid,
+  recordUserHeartbeat,
+  UserRecord,
+} from '../db/repository.ts';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -38,7 +43,10 @@ export const requireAuth = async (
         .json({ error: 'Unauthorized: Invalid or expired session token' });
     }
 
-    const dbUser = await getUserByUid(sessionPayload.uid);
+    let dbUser = await getUserByUid(sessionPayload.uid);
+    if (!dbUser && sessionPayload.email) {
+      dbUser = await getUserByEmail(sessionPayload.email);
+    }
     if (!dbUser || dbUser.deletedAt) {
       return res
         .status(401)
@@ -52,6 +60,8 @@ export const requireAuth = async (
         code: 'ACCOUNT_DEACTIVATED',
       });
     }
+
+    recordUserHeartbeat(dbUser.id);
 
     req.user = {
       uid: dbUser.uid,
@@ -67,3 +77,4 @@ export const requireAuth = async (
       .json({ error: 'Unauthorized: Invalid authentication token' });
   }
 };
+

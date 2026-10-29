@@ -434,6 +434,81 @@ describe('3. Local RAG Engine (Sentence-Transformers 384-D + FAISS/Chroma Vector
     });
     expect(ragFollowUp.resolvedEmployeeId).toBe(sara.id);
     expect(ragFollowUp.reply).toContain(sara.fullName);
+
+    // Test conversational greeting ("hi") responds naturally without raw chunk debug strings
+    const ragHi = await runLocalRagPipeline({
+      query: 'hi',
+      lang: 'en',
+      snapshot: workspace,
+    });
+    expect(ragHi.reply).toContain("Abdak Al-Moti'gh");
+    expect(ragHi.bullets.join(' ')).not.toContain('📌 Retrieved Chunk');
   });
 });
+
+describe('4. Real-Time Member & Admin Chat (Contacts, Online Presence, Delivery & Read Receipts)', () => {
+  it('supports member-to-member and member-to-admin messages, online green dot status, last seen timestamp, delivery receipts, and read receipts', async () => {
+    const {
+      markChatMessagesDeliveredForUser,
+      markChatMessagesReadByRecipient,
+      markUserConnectedSse,
+      markUserDisconnectedSse,
+      sendChatMessage,
+    } = await import('../src/db/repository.ts');
+
+    const admin = await authenticateWithPassword(
+      'admin@velopulse.io',
+      'AdminPass123!'
+    );
+    const sara = await authenticateWithPassword(
+      'sara.chen@velopulse.io',
+      'Employee123!'
+    );
+    const omar = await authenticateWithPassword(
+      'omar.hassan@velopulse.io',
+      'Employee123!'
+    );
+
+    // Mark Sara connected via SSE (online green dot) and Omar disconnected (offline last seen)
+    markUserConnectedSse(sara.id);
+    markUserDisconnectedSse(omar.id);
+
+    const adminWs = await getAllWorkspaceData(admin);
+    expect(adminWs.chatContacts?.length).toBeGreaterThanOrEqual(3);
+    const saraContact = adminWs.chatContacts?.find((c) => c.id === sara.id);
+    expect(saraContact?.isOnline).toBe(true);
+    expect(saraContact?.lastActivityAt).toBeTruthy();
+
+    // Sara sends a direct message to Omar (who is currently offline)
+    const { message: msgToOmar } = await sendChatMessage({
+      sender: sara,
+      recipientId: omar.id,
+      body: 'Hi Omar, can we sync on the Kubernetes deployment?',
+    });
+    expect(msgToOmar.senderId).toBe(sara.id);
+    expect(msgToOmar.recipientId).toBe(omar.id);
+    expect(msgToOmar.readAt).toBeNull();
+
+    // When Omar connects / fetches messages, delivery receipt (deliveredAt) is recorded
+    const delivered = await markChatMessagesDeliveredForUser(omar.id);
+    expect(delivered.updatedIds).toContain(msgToOmar.id);
+    expect(delivered.deliveredAt).toBeTruthy();
+
+    // When Omar opens Sara's conversation, read receipt (readAt) is recorded
+    const readResult = await markChatMessagesReadByRecipient({
+      reader: omar,
+      contactId: sara.id,
+    });
+    expect(readResult.updatedIds).toContain(msgToOmar.id);
+    expect(readResult.readAt).toBeTruthy();
+
+    // Verify Sara now sees both deliveredAt and readAt on her sent message
+    const saraWs = await getAllWorkspaceData(sara);
+    const updatedMsg = saraWs.chatMessages?.find((m) => m.id === msgToOmar.id);
+    expect(updatedMsg?.deliveredAt).not.toBeNull();
+    expect(updatedMsg?.readAt).not.toBeNull();
+  });
+});
+
+
 

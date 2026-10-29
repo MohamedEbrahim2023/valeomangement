@@ -16,7 +16,17 @@ import {
   authenticateWithPassword,
   ensureSeedData,
   getAllWorkspaceData,
+  getUserByEmail,
+  getUserByUid,
   logActivity,
+  markChatMessagesDeliveredForUser,
+  markChatMessagesReadByRecipient,
+  markUserConnectedSse,
+  markUserDisconnectedSse,
+  sendChatMessage,
+  toggleChatMessageReaction,
+  togglePinChatMessage,
+  touchUserLastActivity,
 } from './src/db/repository.ts';
 import {
   addAttachmentMetadata,
@@ -136,6 +146,13 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       metadata: { method: 'password', role: user.role },
     });
 
+    const workspace = await getAllWorkspaceData(user);
+    broadcastRealtimeEvent('PRESENCE_UPDATED', {
+      userId: user.id,
+      isOnline: true,
+      lastSeenAt: new Date().toISOString(),
+    });
+
     return res.json({
       token,
       user: {
@@ -148,6 +165,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         jobTitle: user.jobTitle,
         accountStatus: user.accountStatus,
       },
+      workspace,
     });
   } catch (error: any) {
     if (error?.message === 'ACCOUNT_DEACTIVATED') {
@@ -207,15 +225,21 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // REALTIME SSE STREAM
 // ---------------------------------------------------------------------------
-app.get('/api/realtime/stream', (req: Request, res: Response) => {
+app.get('/api/realtime/stream', async (req: Request, res: Response) => {
   const token = String(req.query.token || '');
   if (!token) {
     return res.status(401).end();
   }
 
   // Strictly verify signed session token before allowing SSE subscription
-  if (!verifySessionToken(token)) {
+  const session = verifySessionToken(token);
+  if (!session) {
     return res.status(401).end();
+  }
+
+  let connectedUser = await getUserByUid(session.uid);
+  if (!connectedUser && session.email) {
+    connectedUser = await getUserByEmail(session.email);
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -232,8 +256,29 @@ app.get('/api/realtime/stream', (req: Request, res: Response) => {
 
   sseClients.add(res);
 
+  if (connectedUser) {
+    markUserConnectedSse(connectedUser.id);
+    await touchUserLastActivity(connectedUser.id);
+    const delivered = await markChatMessagesDeliveredForUser(connectedUser.id);
+    if (delivered.deliveredMessageIds.length > 0) {
+      broadcastRealtimeEvent('CHAT_MESSAGES_DELIVERED', {
+        recipientId: connectedUser.id,
+        messageIds: delivered.deliveredMessageIds,
+        deliveredAt: new Date().toISOString(),
+      });
+    }
+    broadcastRealtimeEvent('PRESENCE_UPDATED', {
+      userId: connectedUser.id,
+      isOnline: true,
+      lastSeenAt: new Date().toISOString(),
+    });
+  }
+
   const heartbeat = setInterval(() => {
     try {
+      if (connectedUser) {
+        markUserConnectedSse(connectedUser.id);
+      }
       res.write(`: heartbeat\n\n`);
     } catch {
       clearInterval(heartbeat);
@@ -244,6 +289,16 @@ app.get('/api/realtime/stream', (req: Request, res: Response) => {
   req.on('close', () => {
     clearInterval(heartbeat);
     sseClients.delete(res);
+    if (connectedUser) {
+      markUserDisconnectedSse(connectedUser.id);
+      const lastSeenAt = new Date().toISOString();
+      touchUserLastActivity(connectedUser.id).catch(() => {});
+      broadcastRealtimeEvent('PRESENCE_UPDATED', {
+        userId: connectedUser.id,
+        isOnline: false,
+        lastSeenAt,
+      });
+    }
   });
 });
 
@@ -712,6 +767,236 @@ app.patch(
 );
 
 // ---------------------------------------------------------------------------
+// REAL-TIME TEAM & ADMIN CHAT ENDPOINTS (PRESENCE, DELIVERY ✓✓, READ ✓✓)
+// ---------------------------------------------------------------------------
+
+app.post(
+  '/api/chat/messages',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const rawBody = String(req.body?.body || '').trim();
+    const rawRecipient = req.body?.recipientId;
+    const recipientId =
+      rawRecipient === null ||
+      rawRecipient === undefined ||
+      rawRecipient === 'general'
+        ? null
+        : Number(rawRecipient);
+
+    const rawReplyTo = req.body?.replyToMessageId;
+    const replyToMessageId =
+      rawReplyTo === null || rawReplyTo === undefined
+        ? null
+        : Number(rawReplyTo);
+    const pinAnnouncement = Boolean(req.body?.pinAnnouncement);
+
+    if (!rawBody) {
+      return res.status(400).json({ error: 'Message text is required.' });
+    }
+    if (rawBody.length > 2000) {
+      return res
+        .status(400)
+        .json({ error: 'Message cannot exceed 2000 characters.' });
+    }
+    if (
+      recipientId !== null &&
+      (!Number.isInteger(recipientId) || recipientId <= 0)
+    ) {
+      return res.status(400).json({ error: 'Invalid recipient ID.' });
+    }
+
+    try {
+      const { message, recipient } = await sendChatMessage({
+        sender: req.dbUser!,
+        recipientId,
+        body: rawBody,
+        replyToMessageId:
+          replyToMessageId && Number.isInteger(replyToMessageId)
+            ? replyToMessageId
+            : null,
+        pinAnnouncement,
+      });
+      const workspace = await getAllWorkspaceData(req.dbUser!);
+
+      broadcastRealtimeEvent('CHAT_MESSAGE_CREATED', {
+        message,
+        senderId: req.dbUser!.id,
+        senderName: req.dbUser!.fullName,
+        recipientId: message.recipientId,
+        recipientName: recipient?.fullName || null,
+      });
+
+      return res.status(201).json({ message, workspace });
+    } catch (error: any) {
+      return res
+        .status(400)
+        .json({ error: error?.message || 'Failed to send chat message.' });
+    }
+  }
+);
+
+app.post(
+  '/api/chat/messages/:id/react',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const messageId = Number(req.params.id);
+    const emoji = String(req.body?.emoji || '').trim();
+    if (!Number.isInteger(messageId) || messageId <= 0 || !emoji) {
+      return res.status(400).json({ error: 'Valid messageId and emoji are required.' });
+    }
+
+    try {
+      const updatedMessage = await toggleChatMessageReaction({
+        user: req.dbUser!,
+        messageId,
+        emoji,
+      });
+      const workspace = await getAllWorkspaceData(req.dbUser!);
+
+      broadcastRealtimeEvent('CHAT_MESSAGE_UPDATED', {
+        message: updatedMessage,
+        actorId: req.dbUser!.id,
+      });
+
+      return res.json({ message: updatedMessage, workspace });
+    } catch (error: any) {
+      return res
+        .status(400)
+        .json({ error: error?.message || 'Failed to react to message.' });
+    }
+  }
+);
+
+app.post(
+  '/api/chat/messages/:id/pin',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const messageId = Number(req.params.id);
+    if (!Number.isInteger(messageId) || messageId <= 0) {
+      return res.status(400).json({ error: 'Invalid message ID.' });
+    }
+
+    try {
+      const isPinnedParam =
+        typeof req.body?.isPinned === 'boolean' ? req.body.isPinned : undefined;
+      const updatedMessage = await togglePinChatMessage({
+        actor: req.dbUser!,
+        messageId,
+        isPinned: isPinnedParam,
+      });
+      const workspace = await getAllWorkspaceData(req.dbUser!);
+
+      broadcastRealtimeEvent('CHAT_MESSAGE_UPDATED', {
+        message: updatedMessage,
+        actorId: req.dbUser!.id,
+      });
+
+      return res.json({ message: updatedMessage, workspace });
+    } catch (error: any) {
+      if (error?.message === 'FORBIDDEN_ONLY_ADMIN_CAN_PIN') {
+        return res.status(403).json({
+          error: 'Only administrators can pin or unpin announcements.',
+          code: 'FORBIDDEN',
+        });
+      }
+      return res
+        .status(400)
+        .json({ error: error?.message || 'Failed to pin/unpin message.' });
+    }
+  }
+);
+
+app.post(
+  '/api/chat/messages/read',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const rawContact = req.body?.contactId;
+    const contactId =
+      rawContact === null ||
+      rawContact === undefined ||
+      rawContact === 'general'
+        ? null
+        : Number(rawContact);
+
+    if (
+      contactId !== null &&
+      (!Number.isInteger(contactId) || contactId <= 0)
+    ) {
+      return res.status(400).json({ error: 'Invalid contact ID.' });
+    }
+
+    try {
+      const result = await markChatMessagesReadByRecipient({
+        reader: req.dbUser!,
+        contactId,
+      });
+      const workspace = await getAllWorkspaceData(req.dbUser!);
+
+      if (result.updatedMessageIds.length > 0) {
+        broadcastRealtimeEvent('CHAT_MESSAGES_READ', {
+          readerId: req.dbUser!.id,
+          readerName: req.dbUser!.fullName,
+          contactId,
+          messageIds: result.updatedMessageIds,
+          readAt: new Date().toISOString(),
+        });
+      }
+
+      return res.json({
+        updatedMessageIds: result.updatedMessageIds,
+        workspace,
+      });
+    } catch (error: any) {
+      return res
+        .status(500)
+        .json({ error: error?.message || 'Failed to mark messages as read.' });
+    }
+  }
+);
+
+app.post(
+  '/api/chat/messages/delivered',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await markChatMessagesDeliveredForUser(req.dbUser!.id);
+      if (result.deliveredMessageIds.length > 0) {
+        broadcastRealtimeEvent('CHAT_MESSAGES_DELIVERED', {
+          recipientId: req.dbUser!.id,
+          messageIds: result.deliveredMessageIds,
+          deliveredAt: new Date().toISOString(),
+        });
+      }
+      return res.json({ deliveredMessageIds: result.deliveredMessageIds });
+    } catch (error: any) {
+      return res
+        .status(500)
+        .json({ error: error?.message || 'Failed to mark messages delivered.' });
+    }
+  }
+);
+
+app.post(
+  '/api/chat/heartbeat',
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    await touchUserLastActivity(req.dbUser!.id);
+    const isTypingTo = req.body?.typingTo ?? undefined;
+    if (isTypingTo !== undefined) {
+      broadcastRealtimeEvent('CHAT_USER_TYPING', {
+        userId: req.dbUser!.id,
+        userName: req.dbUser!.fullName,
+        recipientId: isTypingTo === 'general' ? null : Number(isTypingTo),
+      });
+    }
+    return res.json({
+      online: true,
+      lastSeenAt: new Date().toISOString(),
+    });
+  }
+);
+
+// ---------------------------------------------------------------------------
 // ADMIN-ONLY CSV EXPORTS (Protected against CSV Formula Injection)
 // ---------------------------------------------------------------------------
 
@@ -957,6 +1242,7 @@ app.post(
         bullets: ragResult.bullets,
         referencedAssignmentIds: ragResult.referencedAssignmentIds,
         referencedEmployeeIds: ragResult.referencedEmployeeIds,
+        suggestedFollowUps: ragResult.suggestedFollowUps,
         resolvedEmployeeId: empRef.current,
         ragTelemetry: ragResult.ragTelemetry,
         poweredBy: LLAMA3_MODEL_NAME,

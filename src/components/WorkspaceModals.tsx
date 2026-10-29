@@ -16,16 +16,77 @@ import {
 import { isArabicActive } from '../lib/i18n.ts';
 import {
   AlertCircle,
+  BookmarkPlus,
   CheckCircle2,
   FileText,
   History,
   Paperclip,
   Plus,
+  Repeat,
   Send,
   ShieldCheck,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
+import { TaskTimeTrackerWidget } from './SmartProductivityFeatures.tsx';
+
+interface SavedTaskTemplate {
+  id: string;
+  labelAr: string;
+  labelEn: string;
+  title: string;
+  description: string;
+  priority: 'Low' | 'Medium' | 'High' | 'Critical';
+  category: string;
+  estimatedEffort: number;
+  recurrence: 'none' | 'weekly' | 'monthly';
+  completionCriteria: string;
+}
+
+const DEFAULT_TASK_TEMPLATES: SavedTaskTemplate[] = [
+  {
+    id: 'tpl-sec-audit',
+    labelAr: '🔒 مراجعة السيرفر وأمن المعلومات (أسبوعياً)',
+    labelEn: '🔒 Weekly Server & Security Audit',
+    title: 'مراجعة أمن المعلومات وفحص السيرفرات الأسبوعي',
+    description:
+      'فحص سجلات الوصول، تحديث شهادات الحماية، التأكد من النسخ الاحتياطي لقواعد البيانات، ومراجعة أداء الخوادم.',
+    priority: 'Critical',
+    category: 'Security & Compliance',
+    estimatedEffort: 8,
+    recurrence: 'weekly',
+    completionCriteria: 'اجتياز فحص الثغرات وتوثيق تقرير الحالة الأسبوعي بنسبة 100%',
+  },
+  {
+    id: 'tpl-monthly-kpi',
+    labelAr: '📊 إعداد تقرير الأداء الشهري للقسم (شهرياً)',
+    labelEn: '📊 Monthly Department KPI Report',
+    title: 'إعداد وتجميع تقرير مؤشرات الأداء الشهري (KPIs)',
+    description:
+      'تجميع إحصائيات إنجاز الفريق، تحليل المهام المكتملة والمتأخرة، ورفع التوصيات التنفيذية للإدارة العليا.',
+    priority: 'High',
+    category: 'Executive Operations',
+    estimatedEffort: 10,
+    recurrence: 'monthly',
+    completionCriteria: 'اعتماد التقرير المالي والتشغيلي من مدير القسم',
+  },
+  {
+    id: 'tpl-api-release',
+    labelAr: '⚡ اختبار وإطلاق تحديثات النظام (Release QA)',
+    labelEn: '⚡ Production Release QA & Smoke Testing',
+    title: 'اختبار جودة التحديثات البرمجية قبل الإطلاق (QA Release)',
+    description:
+      'تنفيذ اختبارات التكامل الشاملة (End-to-End Tests)، التحقق من استقرار واجهات API، ومراجعة تجربة المستخدم.',
+    priority: 'High',
+    category: 'Platform Engineering',
+    estimatedEffort: 12,
+    recurrence: 'none',
+    completionCriteria: 'نجاح جميع الاختبارات الآلية دون أخطاء حرجة',
+  },
+];
+
+const CUSTOM_TEMPLATES_KEY = 'velopulse_custom_task_templates_v1';
 
 // ---------------------------------------------------------------------------
 // 1. ADD EMPLOYEE MODAL
@@ -801,6 +862,81 @@ export function CreateEditTaskModal({
   const [confirmCancelTask, setConfirmCancelTask] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recurrence, setRecurrence] = useState<'none' | 'weekly' | 'monthly'>(
+    'none'
+  );
+  const [templateSavedNotice, setTemplateSavedNotice] = useState<string | null>(
+    null
+  );
+  const [customTemplates, setCustomTemplates] = useState<SavedTaskTemplate[]>(
+    () => {
+      try {
+        const raw = localStorage.getItem(CUSTOM_TEMPLATES_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+  );
+
+  const allTemplates = [...DEFAULT_TASK_TEMPLATES, ...customTemplates];
+
+  const applyTaskTemplate = (tpl: SavedTaskTemplate) => {
+    setTitle(tpl.title);
+    setDescription(tpl.description);
+    setPriority(tpl.priority);
+    setCategory(tpl.category);
+    setEstimatedEffort(tpl.estimatedEffort);
+    setRecurrence(tpl.recurrence);
+    setCompletionCriteria(tpl.completionCriteria);
+    if (tpl.recurrence === 'weekly') {
+      setDueDate(
+        new Date(Date.now() + 7 * 86_400_000).toISOString().split('T')[0]
+      );
+    } else if (tpl.recurrence === 'monthly') {
+      setDueDate(
+        new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+      );
+    }
+  };
+
+  const handleSaveCurrentAsTemplate = () => {
+    if (!title.trim() || title.trim().length < 3) {
+      setError(
+        ar
+          ? 'يرجى كتابة عنوان ووصف المهمة أولاً لحفظها كقالب جاهز.'
+          : 'Please enter a title and description first to save as a template.'
+      );
+      return;
+    }
+    const newTpl: SavedTaskTemplate = {
+      id: `custom-${Date.now()}`,
+      labelAr: `⭐ ${title.trim()}`,
+      labelEn: `⭐ ${title.trim()}`,
+      title: title.trim(),
+      description:
+        description.trim() ||
+        (ar ? 'مهمة قياسية متكررة' : 'Standard recurring task template'),
+      priority,
+      category,
+      estimatedEffort: Number(estimatedEffort) || 8,
+      recurrence,
+      completionCriteria,
+    };
+    const updated = [...customTemplates, newTpl];
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(updated));
+    } catch {
+      // ignore storage error
+    }
+    setTemplateSavedNotice(
+      ar
+        ? `تم حفظ القالب "${newTpl.title}" بنجاح لاستخدامه بضغطة زر!`
+        : `Saved "${newTpl.title}" to your ready-to-use templates!`
+    );
+    setTimeout(() => setTemplateSavedNotice(null), 4000);
+  };
 
   const activeEmployees = employees.filter(
     (e) => e.role === 'employee' && e.accountStatus !== 'deactivated'
@@ -851,8 +987,22 @@ export function CreateEditTaskModal({
           assignedEmployeeIds: selectedEmpIds,
         });
       } else {
+        const recurrencePrefix =
+          recurrence === 'weekly'
+            ? ar
+              ? '[مهمة أسبوعية متكررة 🔁] '
+              : '[Weekly Recurring 🔁] '
+            : recurrence === 'monthly'
+            ? ar
+              ? '[مهمة شهرية متكررة 🗓️] '
+              : '[Monthly Recurring 🗓️] '
+            : '';
+        const finalTitle =
+          recurrence !== 'none' && !title.includes('🔁') && !title.includes('🗓️')
+            ? `${recurrencePrefix}${title}`
+            : title;
         await onSubmitCreate({
-          title,
+          title: finalTitle,
           description,
           priority,
           category,
@@ -941,6 +1091,104 @@ export function CreateEditTaskModal({
         )}
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          {/* Ready-to-Use Task Templates & Recurrence Selector */}
+          {!existingTask && (
+            <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-lg space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-950">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span>
+                    {ar
+                      ? 'قوالب المهام الجاهزة والمهام المتكررة (Task Templates & Recurring)'
+                      : 'Ready-to-Use Task Templates & Recurrence'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveCurrentAsTemplate}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-indigo-800 bg-white hover:bg-indigo-100 border border-indigo-300 rounded-md cursor-pointer"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                  <span>
+                    {ar ? 'حفظ النموذج الحالي كقالب' : 'Save Current as Template'}
+                  </span>
+                </button>
+              </div>
+
+              {templateSavedNotice && (
+                <div className="px-2.5 py-1.5 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded text-xs font-medium">
+                  ✓ {templateSavedNotice}
+                </div>
+              )}
+
+              {/* Quick Template Pills */}
+              <div className="flex flex-wrap gap-1.5">
+                {allTemplates.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => applyTaskTemplate(tpl)}
+                    className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-indigo-600 hover:text-white text-slate-800 border border-indigo-200 rounded-md transition-colors cursor-pointer"
+                  >
+                    {ar ? tpl.labelAr : tpl.labelEn}
+                  </button>
+                ))}
+              </div>
+
+              {/* Recurrence Selector */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-indigo-200/70">
+                <span className="text-xs font-semibold text-indigo-950 flex items-center gap-1.5">
+                  <Repeat className="w-3.5 h-3.5 text-indigo-700" />
+                  {ar ? 'دورية وتكرار المهمة:' : 'Task Recurrence Schedule:'}
+                </span>
+                <div className="inline-flex items-center gap-1 bg-white p-1 rounded-md border border-indigo-200">
+                  {[
+                    {
+                      id: 'none',
+                      label: ar ? 'مرة واحدة' : 'One-Time',
+                    },
+                    {
+                      id: 'weekly',
+                      label: ar ? '🔁 أسبوعياً' : '🔁 Weekly',
+                    },
+                    {
+                      id: 'monthly',
+                      label: ar ? '🗓️ شهرياً' : '🗓️ Monthly',
+                    },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setRecurrence(opt.id as any);
+                        if (opt.id === 'weekly') {
+                          setDueDate(
+                            new Date(Date.now() + 7 * 86_400_000)
+                              .toISOString()
+                              .split('T')[0]
+                          );
+                        } else if (opt.id === 'monthly') {
+                          setDueDate(
+                            new Date(Date.now() + 30 * 86_400_000)
+                              .toISOString()
+                              .split('T')[0]
+                          );
+                        }
+                      }}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded cursor-pointer transition-colors ${
+                        recurrence === opt.id
+                          ? 'bg-indigo-700 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">
               {ar ? 'عنوان المهمة *' : 'Task Title *'}
@@ -1474,7 +1722,7 @@ export function AssignmentActionModal({
         </div>
 
         {/* Task Description & Completion Criteria */}
-        <div className="py-3.5 border-b border-slate-200 text-xs text-slate-700 space-y-2">
+        <div className="py-3.5 border-b border-slate-200 text-xs text-slate-700 space-y-3">
           <p className="leading-relaxed">{assignment.task?.description}</p>
           {assignment.task?.completionCriteria && (
             <p className="text-slate-600">
@@ -1484,6 +1732,18 @@ export function AssignmentActionModal({
               {assignment.task.completionCriteria}
             </p>
           )}
+          {assignment.status !== 'approved' &&
+            assignment.status !== 'canceled' && (
+              <TaskTimeTrackerWidget
+                assignmentId={assignment.id}
+                estimatedEffortHours={assignment.task?.estimatedEffort || 8}
+                onStartTaskIfNotStarted={
+                  assignment.status === 'not_started'
+                    ? () => onStartTask(assignment.id)
+                    : undefined
+                }
+              />
+            )}
         </div>
 
         {/* Segmented Tab Bar */}

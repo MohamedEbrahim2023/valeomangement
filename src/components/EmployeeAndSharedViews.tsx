@@ -29,8 +29,11 @@ import {
   Download,
   ExternalLink,
   FileSpreadsheet,
+  Kanban,
+  LayoutGrid,
   Lock,
   Play,
+  Printer,
   Search,
   Sliders,
   Trophy,
@@ -46,7 +49,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { EmployeeOfTheMonthSpotlight } from './EmployeeOfTheMonthSpotlight.tsx';
+import {
+  DailySmartBriefingCard,
+  InteractiveKanbanBoard,
+  MonthlyPerformanceReportModal,
+  TaskTimeTrackerWidget,
+} from './SmartProductivityFeatures.tsx';
 
 // ---------------------------------------------------------------------------
 // 1. EMPLOYEE PERSONAL WORKSPACE & MY TASKS
@@ -77,6 +85,7 @@ export function EmployeeWorkspaceView({
     'all' | 'upcoming' | 'overdue'
   >('all');
   const [startingId, setStartingId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'cards' | 'kanban'>('cards');
 
   const filteredAssignments = useMemo(() => {
     const now = Date.now();
@@ -143,15 +152,15 @@ export function EmployeeWorkspaceView({
         </div>
       </div>
 
-      {/* Employee of the Month Spotlight & Printable PDF Certificate */}
-      {employees.length > 0 && (
-        <EmployeeOfTheMonthSpotlight
-          employees={employees}
-          organization={organization}
-          currentUserId={currentUser.id}
-          isAdmin={false}
-        />
-      )}
+      {/* Daily Smart Briefing by Your Obedient Genie */}
+      <DailySmartBriefingCard
+        currentUser={currentUser}
+        assignments={assignments}
+        employees={employees}
+        onInspectAssignment={(a, mode) =>
+          onOpenAssignmentModal(a, mode || 'update')
+        }
+      />
 
       {/* Personal Summary Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -285,11 +294,48 @@ export function EmployeeWorkspaceView({
               {ar ? 'المتأخرة فقط' : 'Overdue Only'}
             </option>
           </select>
+
+          {/* Cards vs Interactive Kanban Switcher */}
+          <div className="inline-flex items-center p-1 bg-slate-200/80 rounded-lg border border-slate-300">
+            <button
+              type="button"
+              onClick={() => setViewMode('cards')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded cursor-pointer transition-colors ${
+                viewMode === 'cards'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>{ar ? 'البطاقات' : 'Cards'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('kanban')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded cursor-pointer transition-colors ${
+                viewMode === 'kanban'
+                  ? 'bg-indigo-700 text-white shadow-2xs'
+                  : 'text-slate-700 hover:text-slate-900'
+              }`}
+            >
+              <Kanban className="w-3.5 h-3.5" />
+              <span>{ar ? 'لوحة كانبان' : 'Kanban'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* My Tasks Cards */}
-      {filteredAssignments.length === 0 ? (
+      {/* My Tasks: Interactive Kanban or Cards */}
+      {viewMode === 'kanban' ? (
+        <InteractiveKanbanBoard
+          assignments={filteredAssignments}
+          currentUser={currentUser}
+          onStartTask={handleStart}
+          onInspectAssignment={(a, mode) =>
+            onOpenAssignmentModal(a, mode || 'update')
+          }
+        />
+      ) : filteredAssignments.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-lg p-12 text-center">
           <p className="text-base font-bold text-slate-900 font-display">
             {ar
@@ -376,6 +422,19 @@ export function EmployeeWorkspaceView({
                     status={a.status}
                     isOverdue={a.isOverdue}
                   />
+
+                  {/* Built-in Time Tracker & Pomodoro */}
+                  {a.status !== 'approved' && (
+                    <TaskTimeTrackerWidget
+                      assignmentId={a.id}
+                      estimatedEffortHours={a.task?.estimatedEffort || 8}
+                      onStartTaskIfNotStarted={
+                        a.status === 'not_started'
+                          ? () => handleStart(a.id)
+                          : undefined
+                      }
+                    />
+                  )}
 
                   {/* State-Dependent Primary Action Buttons */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
@@ -559,12 +618,6 @@ export function LeaderboardView({
         </div>
       </div>
 
-      {/* Employee of the Month Spotlight & Printable PDF Certificate */}
-      <EmployeeOfTheMonthSpotlight
-        employees={leaderboard}
-        organization={organization}
-      />
-
       {/* Methodology Documentation Card */}
       <div className="bg-white border border-slate-200 rounded-lg p-5">
         <div className="flex items-center gap-2 mb-2">
@@ -725,6 +778,36 @@ export function ReportsAnalyticsView({
   onDownloadCsv: (type: 'employees' | 'tasks') => Promise<void>;
 }) {
   const ar = isArabicActive();
+  const [showPdfReportModal, setShowPdfReportModal] = useState(false);
+
+  const computedSummary: SummaryMetrics = useMemo(() => {
+    const activeEmps = employees.filter(
+      (e) => e.role === 'employee' && e.accountStatus === 'active'
+    ).length;
+    const totalEmps = employees.filter((e) => e.role === 'employee').length;
+    const validAssigns = assignments.filter((a) => a.status !== 'canceled');
+    const completed = validAssigns.filter((a) => a.status === 'approved').length;
+    return {
+      totalEmployees: totalEmps,
+      activeEmployees: activeEmps,
+      totalAssignedTasks: validAssigns.length,
+      tasksNotStarted: validAssigns.filter((a) => a.status === 'not_started')
+        .length,
+      tasksInProgress: validAssigns.filter(
+        (a) => a.status === 'in_progress' || a.status === 'rejected'
+      ).length,
+      tasksAwaitingReview: validAssigns.filter(
+        (a) => a.status === 'awaiting_review'
+      ).length,
+      completedApprovedTasks: completed,
+      overdueTasks: validAssigns.filter((a) => a.isOverdue).length,
+      overallCompletionRate:
+        validAssigns.length > 0
+          ? Math.round((completed / validAssigns.length) * 100)
+          : 0,
+    };
+  }, [employees, assignments]);
+
   const deptData = useMemo(() => {
     const map = new Map<
       string,
@@ -771,12 +854,24 @@ export function ReportsAnalyticsView({
           </h1>
           <p className="text-xs text-slate-500 mt-1">
             {ar
-              ? 'توزيع عبء العمل حسب الأقسام، معدلات التسليم في الموعد، وتصدير التقارير بصيغة CSV / Excel.'
-              : 'Departmental workload distribution, on-time completion trends, and formula-injection safe CSV exports.'}
+              ? 'توزيع عبء العمل حسب الأقسام، معدلات التسليم في الموعد، وتصدير التقارير بصيغة PDF أو CSV / Excel.'
+              : 'Departmental workload distribution, on-time completion trends, and PDF / CSV exports.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setShowPdfReportModal(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md cursor-pointer shadow-xs"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>
+              {ar
+                ? 'تصدير شهادة وتقرير الأداء الشهري (PDF) 🖨️'
+                : 'Export Monthly PDF Report Card 🖨️'}
+            </span>
+          </button>
           <button
             type="button"
             onClick={() => onDownloadCsv('employees')}
@@ -799,6 +894,15 @@ export function ReportsAnalyticsView({
           </button>
         </div>
       </div>
+
+      {showPdfReportModal && (
+        <MonthlyPerformanceReportModal
+          employees={employees}
+          assignments={assignments}
+          summary={computedSummary}
+          onClose={() => setShowPdfReportModal(false)}
+        />
+      )}
 
       {/* Charts Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

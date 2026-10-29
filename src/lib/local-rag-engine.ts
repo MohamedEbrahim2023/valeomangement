@@ -84,6 +84,7 @@ export interface LocalRagResponse {
   referencedAssignmentIds: number[];
   referencedEmployeeIds: number[];
   resolvedEmployeeId: number | null;
+  suggestedFollowUps?: string[];
   ragTelemetry: RagPipelineTelemetry;
 }
 
@@ -781,6 +782,7 @@ export function synthesizeLlama3RagAnswer(
   bullets: string[];
   referencedAssignmentIds: number[];
   referencedEmployeeIds: number[];
+  suggestedFollowUps?: string[];
 } {
   const ar = lang === 'ar';
   const q = normalizeRagText(rawQuery);
@@ -790,18 +792,27 @@ export function synthesizeLlama3RagAnswer(
   const activeAssignments = snapshot.assignments.filter(
     (a) => a.status !== 'canceled'
   );
-  const operationalEmployees = snapshot.employees.filter(
-    (e) =>
-      e.accountStatus === 'active' &&
-      (e.role === 'employee' || e.totalAssigned > 0)
+
+  // Deduplicate employees by fullName so multiple default "System Administrator" accounts never repeat
+  const seenEmpNames = new Set<string>();
+  const uniqueActiveEmployees = snapshot.employees.filter((e) => {
+    if (e.accountStatus !== 'active') return false;
+    const key = `${e.role}:${e.fullName.toLowerCase()}`;
+    if (seenEmpNames.has(key)) return false;
+    seenEmpNames.add(key);
+    return true;
+  });
+
+  const operationalEmployees = uniqueActiveEmployees.filter(
+    (e) => e.role === 'employee' || e.totalAssigned > 0
   );
   const staffList =
     operationalEmployees.length > 0
       ? operationalEmployees
-      : snapshot.employees.filter((e) => e.accountStatus === 'active');
+      : uniqueActiveEmployees;
 
   // Entity & Pronoun Resolution
-  let matchedEmployee = snapshot.employees.find((emp) => {
+  let matchedEmployee = uniqueActiveEmployees.find((emp) => {
     const normName = normalizeRagText(emp.fullName);
     const parts = normName.split(' ').filter((p) => p.length >= 3);
     if (q.includes(normName)) return true;
@@ -870,7 +881,147 @@ export function synthesizeLlama3RagAnswer(
       q
     );
 
-  // 0. If user asks who the assistant is or how the local RAG + Llama 3 system works
+  const asksGreeting =
+    /^(سلام|السلام عليكم|وعليكم السلام|اهلا|مرحبا|مرحب|هاي|هلا|صباح الخير|مساء الخير|ازيك|عامل ايه|اخبارك|يا هلا|يا مرحبا|حبيبي|يا باشا|يا معلم|يا بطل|الو|hi|hello|hey|good morning|good evening|how are you|whats up|sup|yo)(\s|$|[!؟?])/u.test(
+      q
+    ) && words.length <= 6;
+
+  const asksThanksOrPraise =
+    /(شكرا|متشكر|تسلم|عاش|ممتاز|جامد|برافو|الله ينور|شاطر|بطل|thanks|thank you|awesome|great job|nice|cool|bravo)/u.test(
+      q
+    ) && words.length <= 7;
+
+  const asksJokeOrFun =
+    /(نكته|ضحكني|دمك خفيف|فرفشني|قول حاجه تضحك|حاجه مرحه|joke|funny|make me laugh)/u.test(
+      q
+    );
+
+  const asksCapabilitiesOrHelp =
+    /(تقدر تعمل ايه|بتعمل ايه|فائدتك ايه|بتساعد في ايه|ازاي تساعدني|تساعدني ازاي|الاوامر|مساعده|سؤال|اسألك ايه|what can you do|help me|capabilities|commands|how can you help)/u.test(
+      q
+    );
+
+  // 0A. Greeting / Casual Chitchat ("hi", "hello", "ازيك", "سلام عليكم")
+  if (asksGreeting) {
+    const completedCount = activeAssignments.filter(
+      (a) => a.status === 'approved' || a.progressPercentage === 100
+    ).length;
+    const unfinishedCount = activeAssignments.filter(
+      (a) => a.status !== 'approved' && a.progressPercentage < 100
+    ).length;
+    const overdueCount = activeAssignments.filter((a) => a.isOverdue).length;
+
+    return {
+      reply: ar
+        ? `أهلاً وسهلاً بيك يا غالي! 🧞‍♂️✨ معاك «عبدك المطيغ»، صاحي ومصحصح وجاهز لخدمتك في أي وقت! طمني تحب نبدأ بإيه النهارده؟ دي نظرة سريعة على حالة الموقع دلوقتي:`
+        : `Hello there! 🧞‍♂️✨ I am "Abdak Al-Moti'gh", your cheerful and obedient workspace genie! How can I brighten your workflow today? Here is a quick live pulse of your workspace:`,
+      bullets: ar
+        ? [
+            `📊 إجمالي المهام النشطة حالياً: ${activeAssignments.length} مهمة (نسبة الإنجاز العام: ${snapshot.summary.overallCompletionRate}%)`,
+            `✅ المهام المكتملة (100%): ${completedCount} مهمة | ⏳ المهام الجارية أو غير المكتملة: ${unfinishedCount} مهمة`,
+            overdueCount > 0
+              ? `⚠️ تنبيه سريع: يوجد ${overdueCount} مهمة متأخرة تحتاج متابعة!`
+              : `🎉 خبر يفرح: مفيش ولا مهمة متأخرة عن موعدها النهارده!`,
+          ]
+        : [
+            `📊 Total Active Tasks: ${activeAssignments.length} (Overall Completion Rate: ${snapshot.summary.overallCompletionRate}%)`,
+            `✅ Completed Tasks (100%): ${completedCount} | ⏳ Unfinished / In-Progress Tasks: ${unfinishedCount}`,
+            overdueCount > 0
+              ? `⚠️ Quick Heads-up: There are ${overdueCount} overdue task(s) needing attention!`
+              : `🎉 Great news: 0 overdue tasks right now — the team is right on schedule!`,
+          ],
+      referencedAssignmentIds: [],
+      referencedEmployeeIds: [],
+      suggestedFollowUps: ar
+        ? [
+            'ايه هي المهام اللي لسة مكتملتش؟',
+            'مين اللي خلص التاسكات بتاعته؟',
+            'مين أفضل موظف في النقاط؟',
+            'بتعمل إيه وتقدر تساعدني إزاي؟',
+          ]
+        : [
+            'Which tasks are still unfinished?',
+            'Who completed their tasks at 100%?',
+            'Who is the top performer on the leaderboard?',
+            'What can you do to help me?',
+          ],
+    };
+  }
+
+  // 0B. Thanks / Praise
+  if (asksThanksOrPraise) {
+    return {
+      reply: ar
+        ? `العفو يا كبير! 🧞‍♂️💙 ده أنا «عبدك المطيغ» وخدمتك شرف وسعادة ليا! لو احتجت أي تقرير أو متابعة لأي موظف أو مهمة، شاور بس وأنا أجيبلك القرار في لمح البصر!`
+        : `You are most welcome! 🧞‍♂️💙 I am "Abdak Al-Moti'gh" and serving you is my greatest joy! Anytime you need task analytics, employee progress, or quick action links, just ask!`,
+      bullets: [],
+      referencedAssignmentIds: [],
+      referencedEmployeeIds: [],
+      suggestedFollowUps: ar
+        ? [
+            'ايه هي المهام اللي لسة مكتملتش؟',
+            'آخر مهمة خلصت كانت إيه؟',
+            'هل في مهام متأخرة؟',
+          ]
+        : [
+            'Which tasks are unfinished?',
+            'What was the last completed task?',
+            'Are there any overdue tasks?',
+          ],
+    };
+  }
+
+  // 0C. Joke / Fun
+  if (asksJokeOrFun) {
+    return {
+      reply: ar
+        ? `ههههه طلباتك أوامر! 🧞‍♂️😂 مرة مدير سألني: "إنت ليه اسمك عبدك المطيغ ومبتتعبش أبداً؟" قولتله: "عشان شغال بـ الـ Embeddings ومبزوغش في البريك ولا بطلب إجازة عارضة!" 😄✨ تحب بقى نشوف مين من الموظفين شغال بنشاط زيي النهارده؟`
+        : `Haha your wish is my command! 🧞‍♂️😂 Why did the AI genie never miss a deadline? Because my tasks are indexed in a 384-D vector space and I never take coffee breaks! 😄✨ Want to see who is leading the team scoreboard today?`,
+      bullets: [],
+      referencedAssignmentIds: [],
+      referencedEmployeeIds: [],
+      suggestedFollowUps: ar
+        ? ['مين أفضل موظف في لوحة الصدارة؟', 'مين اللي خلص التاسكات بتاعته؟']
+        : ['Who is leading the leaderboard?', 'Who finished their tasks?'],
+    };
+  }
+
+  // 0D. Capabilities / Help
+  if (asksCapabilitiesOrHelp) {
+    return {
+      reply: ar
+        ? `تحت أمرك يا فندم! أنا «عبدك المطيغ» 🧞‍♂️✨ وبقدر أساعدك في كل تفصيلة جوه الموقع في ثواني:`
+        : `At your service! I am "Abdak Al-Moti'gh" 🧞‍♂️✨ and here is everything I can do for you right inside the workspace:`,
+      bullets: ar
+        ? [
+            `🔍 متابعة المهام: أسألك وتقولي "ايه المهام اللي لسة مكتملتش؟" أو "مين خلص التاسكات بتاعته؟" أو "هل في مهام متأخرة؟"`,
+            `👤 تقارير الموظفين الذكية: اسألني عن أي موظف بالاسم وهجيبلك مهامه، نقاطه، وآخر مهمة أنجزها (ومش بنسى الضمائر لو قولتلي "وآخر مهمة خلصها كانت إيه؟").`,
+            `🏆 لوحة الصدارة: بعرفك مين موظف الشهر وترتيب الفريق بالنقاط ومعدل الالتزام بالمواعيد.`,
+            `⚡ أزرار تفاعلية مباشرة: تحت كل إجابة بحطلك أزرار تفتح بيها تفاصيل المهمة أو ملف الموظف بضغطة واحدة!`,
+          ]
+        : [
+            `🔍 Live Task Tracking: Ask "Which tasks are unfinished?", "Who completed their tasks?", or "Are any tasks overdue?"`,
+            `👤 Smart Employee Profiles: Ask about any employee by name (and follow up with pronouns like "What was the last task they completed?").`,
+            `🏆 Leaderboard & Analytics: Check top performers, weighted scores, and on-time completion rates.`,
+            `⚡ One-Click Interactive Actions: Every answer includes direct buttons to open the referenced task or employee drawer!`,
+          ],
+      referencedAssignmentIds: [],
+      referencedEmployeeIds: [],
+      suggestedFollowUps: ar
+        ? [
+            'ايه هي المهام اللي لسة مكتملتش؟',
+            'مين اللي خلص التاسكات بتاعته؟',
+            'مين أفضل موظف في النقاط؟',
+          ]
+        : [
+            'Which tasks are still unfinished?',
+            'Who completed their tasks?',
+            'Who is the top employee?',
+          ],
+    };
+  }
+
+  // 0E. If user asks who the assistant is or how the local RAG + Llama 3 system works
   if (asksAboutRagArchitecture) {
     return {
       reply: ar
@@ -891,6 +1042,17 @@ export function synthesizeLlama3RagAnswer(
           ],
       referencedAssignmentIds: [],
       referencedEmployeeIds: [],
+      suggestedFollowUps: ar
+        ? [
+            'ايه هي المهام اللي لسة مكتملتش؟',
+            'مين اللي خلص التاسكات بتاعته؟',
+            'مين أفضل موظف في النقاط؟',
+          ]
+        : [
+            'Which tasks are still unfinished?',
+            'Who completed their tasks?',
+            'Who is the top performer?',
+          ],
     };
   }
 
@@ -1185,39 +1347,53 @@ export function synthesizeLlama3RagAnswer(
     };
   }
 
-  // 7. DEFAULT: Grounded Synthesis from Top Retrieved Chunks + Live Summary
+  // 7. DEFAULT: Natural, Cheerful Grounded Summary from «عبدك المطيغ»
   const completedList = activeAssignments.filter(
     (a) => a.status === 'approved' || a.progressPercentage === 100
   );
   const unfinishedList = activeAssignments.filter(
     (a) => a.status !== 'approved' && a.progressPercentage < 100
   );
+  const realEmployeesOnly = staffList.filter((e) => e.role === 'employee');
 
   return {
     reply: ar
-      ? `تم البحث في قاعدة البيانات المتجهية المحلية (${VECTOR_DB_ENGINE}) واسترجاع أعلى ${retrievedChunks.length} مقاطع تطابقاً مع سؤالك وتوليد الإجابة عبر ${LLAMA3_MODEL_NAME}:`
-      : `Retrieved the top ${retrievedChunks.length} matching vector chunks from ${VECTOR_DB_ENGINE} and synthesized the answer via ${LLAMA3_MODEL_NAME}:`,
+      ? `تحت أمرك يا غالي! 🧞‍♂️✨ راجعتلك كل بيانات المنصة في لمح البصر، وده الملخص الكامل لحالة المهام والفريق دلوقتي:`
+      : `At your service! 🧞‍♂️✨ I checked the live workspace data for you — here is the current status of tasks and team members:`,
     bullets: ar
       ? [
-          `إجمالي المهام المسندة: ${activeAssignments.length} مهمة (معدل الإنجاز العام: ${snapshot.summary.overallCompletionRate}%)`,
-          `✓ المهام المكتملة (100%): ${completedList.length} مهمة (${completedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName}`).join(' ، ') || 'لا يوجد'})`,
-          `⏳ المهام غير المكتملة (اللي لسة مخلصتش): ${unfinishedList.length} مهمة (${unfinishedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName} (${a.progressPercentage}%)`).join(' ، ') || 'لا يوجد'})`,
-          ...retrievedChunks.slice(0, 2).map(
-            (c) =>
-              `📌 مقطع مسترجع [${(c.score * 100).toFixed(0)}% تطابق]: ${c.metadata.title}`
-          ),
+          `📊 إجمالي المهام المسندة: ${activeAssignments.length} مهمة (معدل الإنجاز العام: ${snapshot.summary.overallCompletionRate}%)`,
+          `✅ المهام المكتملة (100%): ${completedList.length} مهمة (${completedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName}`).join(' ، ') || 'لا يوجد حتى الآن'})`,
+          `⏳ المهام الجارية أو غير المكتملة: ${unfinishedList.length} مهمة (${unfinishedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName} (${a.progressPercentage}%)`).join(' ، ') || 'لا يوجد'})`,
+          ...(realEmployeesOnly.length > 0
+            ? [
+                `👥 أعضاء الفريق النشطون (${realEmployeesOnly.length}): ${realEmployeesOnly.map((e) => `${e.fullName} (${e.department})`).join(' ، ')}`,
+              ]
+            : []),
         ]
       : [
-          `Total Assigned Tasks: ${activeAssignments.length} (Overall Completion Rate: ${snapshot.summary.overallCompletionRate}%)`,
-          `✓ Completed Tasks (100%): ${completedList.length} (${completedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName}`).join(', ') || 'None'})`,
-          `⏳ Unfinished Tasks (< 100%): ${unfinishedList.length} (${unfinishedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName} (${a.progressPercentage}%)`).join(', ') || 'None'})`,
-          ...retrievedChunks.slice(0, 2).map(
-            (c) =>
-              `📌 Retrieved Chunk [${(c.score * 100).toFixed(0)}% match]: ${c.metadata.title}`
-          ),
+          `📊 Total Assigned Tasks: ${activeAssignments.length} (Overall Completion Rate: ${snapshot.summary.overallCompletionRate}%)`,
+          `✅ Completed Tasks (100%): ${completedList.length} (${completedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName}`).join(', ') || 'None yet'})`,
+          `⏳ Unfinished / In-Progress Tasks (< 100%): ${unfinishedList.length} (${unfinishedList.map((a) => `"${a.task?.title}" — ${a.employee?.fullName} (${a.progressPercentage}%)`).join(', ') || 'None'})`,
+          ...(realEmployeesOnly.length > 0
+            ? [
+                `👥 Active Team Members (${realEmployeesOnly.length}): ${realEmployeesOnly.map((e) => `${e.fullName} (${e.department})`).join(', ')}`,
+              ]
+            : []),
         ],
     referencedAssignmentIds: activeAssignments.slice(0, 4).map((a) => a.id),
-    referencedEmployeeIds: staffList.slice(0, 3).map((e) => e.id),
+    referencedEmployeeIds: realEmployeesOnly.slice(0, 3).map((e) => e.id),
+    suggestedFollowUps: ar
+      ? [
+          'ايه هي المهام اللي لسة مكتملتش؟',
+          'مين اللي خلص التاسكات بتاعته؟',
+          'مين أفضل موظف في النقاط؟',
+        ]
+      : [
+          'Which tasks are still unfinished?',
+          'Who completed their tasks at 100%?',
+          'Who is the top performer?',
+        ],
   };
 }
 

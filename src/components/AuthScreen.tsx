@@ -12,7 +12,7 @@ import {
 interface AuthScreenProps {
   lang: Language;
   onToggleLang: () => void;
-  onLoginSuccess: (token: string) => Promise<void> | void;
+  onLoginSuccess: (token: string, initialWorkspace?: any) => Promise<void> | void;
   externalError?: string | null;
   onOpenGuide?: () => void;
 }
@@ -91,7 +91,7 @@ export function AuthScreen({
         // Ignore storage errors
       }
 
-      await onLoginSuccess(data.token);
+      await onLoginSuccess(data.token, data.workspace);
     } catch (err: any) {
       setError(err.message || 'Unable to sign in');
     } finally {

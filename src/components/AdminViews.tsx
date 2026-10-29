@@ -20,11 +20,16 @@ import {
   ChevronRight,
   Edit3,
   FolderPlus,
+  Kanban,
+  LayoutList,
   Plus,
   Search,
   UserPlus,
 } from 'lucide-react';
-import { EmployeeOfTheMonthSpotlight } from './EmployeeOfTheMonthSpotlight.tsx';
+import {
+  DailySmartBriefingCard,
+  InteractiveKanbanBoard,
+} from './SmartProductivityFeatures.tsx';
 
 // ---------------------------------------------------------------------------
 // 1. ADMIN OVERVIEW DASHBOARD
@@ -94,11 +99,23 @@ export function AdminOverviewView({
         </div>
       </div>
 
-      {/* Employee of the Month Spotlight & Printable PDF Certificate */}
-      <EmployeeOfTheMonthSpotlight
+      {/* Daily Smart Briefing by Your Obedient Genie */}
+      <DailySmartBriefingCard
+        currentUser={{
+          id: 1,
+          uid: 'admin',
+          email: 'admin@velopulse.io',
+          fullName: ar ? 'مدير النظام' : 'System Administrator',
+          role: 'admin',
+          department: 'Executive Operations',
+          jobTitle: 'Director of Operations',
+          employeeNumber: 'ADM-001',
+          accountStatus: 'active',
+          lastActivityAt: new Date().toISOString(),
+        }}
+        assignments={assignments}
         employees={employees}
-        isAdmin={true}
-        onSelectEmployee={onSelectEmployee}
+        onInspectAssignment={onInspectAssignment}
       />
 
       {/* 9 Real Database-Calculated Summary Cards */}
@@ -720,6 +737,7 @@ export function AdminTaskManagementView({
   const [statusFilter, setStatusFilter] = useState('all');
   const [employeeFilter, setEmployeeFilter] = useState('all');
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
@@ -760,6 +778,20 @@ export function AdminTaskManagementView({
     overdueOnly,
   ]);
 
+  const flattenedFilteredAssignments = useMemo(() => {
+    const list: EnrichedAssignment[] = [];
+    for (const t of filteredTasks) {
+      for (const a of t.assignments || []) {
+        if (statusFilter !== 'all' && a.status !== statusFilter) continue;
+        if (employeeFilter !== 'all' && a.employeeId !== Number(employeeFilter))
+          continue;
+        if (overdueOnly && !a.isOverdue) continue;
+        list.push(a);
+      }
+    }
+    return list;
+  }, [filteredTasks, statusFilter, employeeFilter, overdueOnly]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -775,14 +807,48 @@ export function AdminTaskManagementView({
               : 'Each employee assigned to a shared task maintains an independent assignment record, progress bar, and review state.'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onOpenCreateTask}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-indigo-700 hover:bg-indigo-800 rounded-md cursor-pointer"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>{ar ? 'إنشاء وإسناد مهمة' : 'Create & Assign Task'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* View Mode Switcher: List vs Interactive Kanban */}
+          <div className="inline-flex items-center p-1 bg-slate-200/80 rounded-lg border border-slate-300">
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer transition-colors ${
+                viewMode === 'list'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <LayoutList className="w-3.5 h-3.5" />
+              <span>{ar ? 'العرض الجدولي' : 'Table View'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('kanban')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md cursor-pointer transition-colors ${
+                viewMode === 'kanban'
+                  ? 'bg-indigo-700 text-white shadow-2xs'
+                  : 'text-slate-700 hover:text-slate-900'
+              }`}
+            >
+              <Kanban className="w-3.5 h-3.5" />
+              <span>
+                {ar
+                  ? 'لوحة كانبان (سحب وإفلات)'
+                  : 'Kanban Board (Drag & Drop)'}
+              </span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenCreateTask}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-indigo-700 hover:bg-indigo-800 rounded-md cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{ar ? 'إنشاء وإسناد مهمة' : 'Create & Assign Task'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Bar */}
@@ -884,23 +950,41 @@ export function AdminTaskManagementView({
         </div>
       </div>
 
-      {/* Tasks List with Independent Assignment Breakdown */}
-      <div className="space-y-4">
-        {filteredTasks.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-lg p-10 text-center">
-            <p className="text-sm font-semibold text-slate-900">
-              {ar
-                ? 'لا توجد مهام تطابق الفلاتر المحددة'
-                : 'No tasks match the selected filters'}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              {ar
-                ? 'قم بتغيير فلتر الحالة أو أنشئ مهمة جديدة.'
-                : 'Adjust your status filter dropdown or create a new task assignment.'}
-            </p>
-          </div>
-        ) : (
-          filteredTasks.map((task) => {
+      {/* Tasks List or Interactive Kanban Board */}
+      {viewMode === 'kanban' ? (
+        <InteractiveKanbanBoard
+          assignments={flattenedFilteredAssignments}
+          currentUser={{
+            id: 1,
+            uid: 'admin',
+            email: 'admin@velopulse.io',
+            fullName: ar ? 'مدير النظام' : 'System Administrator',
+            role: 'admin',
+            department: 'Executive Operations',
+            jobTitle: 'Director of Operations',
+            employeeNumber: 'ADM-001',
+            accountStatus: 'active',
+            lastActivityAt: new Date().toISOString(),
+          }}
+          onInspectAssignment={onInspectAssignment}
+        />
+      ) : (
+        <div className="space-y-4">
+          {filteredTasks.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-lg p-10 text-center">
+              <p className="text-sm font-semibold text-slate-900">
+                {ar
+                  ? 'لا توجد مهام تطابق الفلاتر المحددة'
+                  : 'No tasks match the selected filters'}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {ar
+                  ? 'قم بتغيير فلتر الحالة أو أنشئ مهمة جديدة.'
+                  : 'Adjust your status filter dropdown or create a new task assignment.'}
+              </p>
+            </div>
+          ) : (
+            filteredTasks.map((task) => {
             const allAssigns = task.assignments || [];
             const assigns =
               statusFilter === 'all'
@@ -1040,7 +1124,8 @@ export function AdminTaskManagementView({
             );
           })
         )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
