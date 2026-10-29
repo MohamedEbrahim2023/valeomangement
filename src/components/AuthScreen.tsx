@@ -4,10 +4,13 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
+  Download,
   Globe,
   Lock,
   Mail,
+  Smartphone,
 } from 'lucide-react';
+import { PWAInstallButton } from './AndroidApkAndMobileCenter.tsx';
 
 interface AuthScreenProps {
   lang: Language;
@@ -134,6 +137,17 @@ export function AuthScreen({
         </a>
 
         <div className="flex items-center gap-2">
+          <a
+            href="/api/mobile/download-apk"
+            download="VeloPulse-Enterprise-v1.0.0.apk"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>
+              {lang === 'ar' ? 'تحميل تطبيق الأندرويد APK' : 'Download Android APK'}
+            </span>
+          </a>
+          <PWAInstallButton lang={lang} />
           {onOpenGuide && (
             <button
               type="button"

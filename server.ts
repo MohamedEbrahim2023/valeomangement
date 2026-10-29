@@ -12,6 +12,11 @@ import {
   VECTOR_DB_ENGINE,
 } from './src/lib/local-rag-engine.ts';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
+import crypto from 'crypto';
+import {
+  getSupabaseStatusSnapshot,
+  verifyPostgresConnectivity,
+} from './src/db/index.ts';
 import {
   authenticateWithPassword,
   ensureSeedData,
@@ -23,6 +28,7 @@ import {
   markChatMessagesReadByRecipient,
   markUserConnectedSse,
   markUserDisconnectedSse,
+  resetDatabaseSeedFlag,
   sendChatMessage,
   toggleChatMessageReaction,
   togglePinChatMessage,
@@ -77,15 +83,27 @@ const __dirname = path.dirname(__filename);
 export const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// Security Headers Middleware
-app.use((_req: Request, res: Response, next: NextFunction) => {
+// Security & Mobile APK CORS Headers Middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+  );
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, Cache-Control, Pragma'
+  );
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader(
     'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=()'
+    'camera=(), microphone=(self), geolocation=()'
   );
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
   next();
 });
 
@@ -1256,6 +1274,111 @@ app.post(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// ANDROID APK & SUPABASE BACKEND ENDPOINTS
+// ---------------------------------------------------------------------------
+
+app.get('/api/mobile/status', async (_req: Request, res: Response) => {
+  await ensureSeedData();
+  const apkPath = path.join(
+    __dirname,
+    'public',
+    'downloads',
+    'VeloPulse-Enterprise-v1.0.0.apk'
+  );
+  let apkReady = false;
+  let apkSizeBytes = 0;
+  let apkSha256 = '';
+
+  if (fs.existsSync(apkPath)) {
+    apkReady = true;
+    const buf = fs.readFileSync(apkPath);
+    apkSizeBytes = buf.length;
+    apkSha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  }
+
+  return res.json({
+    apkReady,
+    apkFilename: 'VeloPulse-Enterprise-v1.0.0.apk',
+    apkSizeBytes,
+    apkSha256,
+    apkDownloadUrl: '/api/mobile/download-apk',
+    androidProjectDownloadUrl: '/api/mobile/download-android-project',
+    packageName: 'io.velopulse.enterprise',
+    versionName: '1.0.0',
+    versionCode: 1,
+    minSdk: 21,
+    targetSdk: 29,
+    backendUrl:
+      process.env.APP_URL ||
+      'https://ais-pre-6koxp5cugo7zbxeupl33g2-886551457424.europe-west2.run.app',
+    supabase: getSupabaseStatusSnapshot(),
+  });
+});
+
+app.post('/api/mobile/test-supabase', async (req: Request, res: Response) => {
+  const customUrl =
+    typeof req.body?.databaseUrl === 'string'
+      ? req.body.databaseUrl.trim()
+      : undefined;
+  const result = await verifyPostgresConnectivity(customUrl);
+  resetDatabaseSeedFlag();
+  await ensureSeedData();
+  return res.json(result);
+});
+
+app.get('/api/mobile/download-apk', (_req: Request, res: Response) => {
+  const apkPath = path.join(
+    __dirname,
+    'public',
+    'downloads',
+    'VeloPulse-Enterprise-v1.0.0.apk'
+  );
+  if (!fs.existsSync(apkPath)) {
+    return res.status(404).json({ error: 'APK binary not found' });
+  }
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="VeloPulse-Enterprise-v1.0.0.apk"'
+  );
+  return res.sendFile(apkPath);
+});
+
+app.get(
+  '/api/mobile/download-android-project',
+  (_req: Request, res: Response) => {
+    const zipPath = path.join(
+      __dirname,
+      'public',
+      'downloads',
+      'VeloPulse-Android-Studio-Project.zip'
+    );
+    if (!fs.existsSync(zipPath)) {
+      return res.status(404).json({ error: 'Android Studio project archive not found' });
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="VeloPulse-Android-Studio-Project.zip"'
+    );
+    return res.sendFile(zipPath);
+  }
+);
+
+app.get('/api/mobile/download-sql-schema', (_req: Request, res: Response) => {
+  const sqlPath = path.join(__dirname, 'supabase-schema.sql');
+  if (!fs.existsSync(sqlPath)) {
+    return res.status(404).json({ error: 'Schema SQL file not found' });
+  }
+  res.setHeader('Content-Type', 'application/sql; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="supabase-schema.sql"'
+  );
+  return res.sendFile(sqlPath);
+});
 
 // ---------------------------------------------------------------------------
 // SERVER BOOTSTRAP

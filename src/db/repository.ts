@@ -1,5 +1,10 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { db, isPostgresConfigured, pool } from './index.ts';
+import {
+  db,
+  isPostgresConfigured,
+  pool,
+  verifyPostgresConnectivity,
+} from './index.ts';
 import { getLocalDb, nextId, saveLocalDb } from './local-store.ts';
 import {
   activityLogs,
@@ -95,6 +100,12 @@ function isAdminEmail(email: string): boolean {
 
 let isSeeded = false;
 let schemaInitialized = false;
+let initialConnectivityChecked = false;
+
+export function resetDatabaseSeedFlag(): void {
+  isSeeded = false;
+  schemaInitialized = false;
+}
 
 export async function ensureDatabaseSchema(): Promise<void> {
   if (schemaInitialized) return;
@@ -308,6 +319,11 @@ export async function ensureDatabaseSchema(): Promise<void> {
 
 export async function ensureSeedData(): Promise<void> {
   if (isSeeded) return;
+
+  if (!initialConnectivityChecked) {
+    initialConnectivityChecked = true;
+    await verifyPostgresConnectivity();
+  }
 
   if (!isPostgresConfigured()) {
     const state = getLocalDb();

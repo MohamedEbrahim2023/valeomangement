@@ -38,6 +38,11 @@ import { SiteDataAssistant } from './components/SiteDataAssistant.tsx';
 import { TeamChatView } from './components/TeamChatView.tsx';
 import { EmployeeOfTheMonthSpotlight } from './components/EmployeeOfTheMonthSpotlight.tsx';
 import {
+  AndroidApkAndMobileCenterView,
+  OfflineIndicator,
+  PWAInstallButton,
+} from './components/AndroidApkAndMobileCenter.tsx';
+import {
   AlertToneType,
   getDesktopNotificationPermission,
   playNotificationChime,
@@ -63,6 +68,7 @@ import {
   RefreshCw,
   Shield,
   Sliders,
+  Smartphone,
   Trophy,
   User,
   Users,
@@ -83,6 +89,7 @@ type ActiveSection =
   | 'notifications'
   | 'audit'
   | 'settings'
+  | 'apk'
   | 'guide';
 
 const AUTH_TOKEN_KEY = 'velopulse_auth_token';
@@ -856,7 +863,7 @@ export default function App() {
     id: ActiveSection;
     label: string;
     icon: React.ReactNode;
-    badge?: number;
+    badge?: number | string;
     adminOnly?: boolean;
   }[] = [
     {
@@ -932,6 +939,15 @@ export default function App() {
       ) : (
         <User className="w-4 h-4" />
       ),
+    },
+    {
+      id: 'apk',
+      label:
+        lang === 'ar'
+          ? 'تطبيق الأندرويد (APK)'
+          : 'Android App (APK)',
+      icon: <Smartphone className="w-4 h-4 text-emerald-600" />,
+      badge: 'APK',
     },
     {
       id: 'guide',
@@ -1120,6 +1136,11 @@ export default function App() {
               </span>
             </button>
 
+            <PWAInstallButton
+              lang={lang}
+              onOpenApkCenter={() => setActiveSection('apk')}
+            />
+
             <button
               type="button"
               onClick={() => setActiveSection('guide')}
@@ -1277,6 +1298,13 @@ export default function App() {
 
         {/* Active Section Viewport */}
         <main className="flex-1 p-3.5 sm:p-6 pb-28 md:pb-8 max-w-[1400px] w-full mx-auto">
+          {activeSection === 'apk' && (
+            <AndroidApkAndMobileCenterView
+              lang={lang}
+              showToast={showNotificationToast}
+            />
+          )}
+
           {activeSection === 'guide' && (
             <UserGuideView onClose={() => setActiveSection('overview')} />
           )}
@@ -1787,6 +1815,7 @@ export default function App() {
           }
         }}
       />
+      <OfflineIndicator lang={lang} />
     </div>
   );
 }
